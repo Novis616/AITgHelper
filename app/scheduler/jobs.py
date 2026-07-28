@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.common.time import utc_now
 from app.repositories import ReminderRepository, UserRepository
+from app.security.encryption import decrypt_text
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,10 @@ async def send_reminder_job(
         try:
             await bot.send_message(
                 chat_id=user.telegram_id,
-                text=reminder_message_text(text=reminder.text, overdue=overdue),
+                text=reminder_message_text(
+                    text=decrypt_text(reminder.text) or "",
+                    overdue=overdue,
+                ),
             )
         except Exception as exc:
             await reminders.mark_failed(reminder, error_text=compact_error_text(exc))

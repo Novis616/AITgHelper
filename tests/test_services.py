@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError as PydanticValidationError
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.errors import NotFoundError, ValidationError
@@ -74,6 +76,41 @@ def test_note_service_creates_lists_and_deletes_plain_note(tmp_path: Path) -> No
     run(scenario())
 
 
+def test_note_service_stores_ciphertext_and_returns_plaintext(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        session = await make_session(tmp_path)
+        try:
+            service = NoteService(session)
+            secret_content = "private note body"
+            secret_title = "private title"
+
+            note = await service.create_note(
+                CreateNoteInput(
+                    telegram_id=1010,
+                    title=secret_title,
+                    content=secret_content,
+                )
+            )
+
+            assert note.title == secret_title
+            assert note.content == secret_content
+
+            row = (
+                await session.execute(
+                    text("SELECT title, content FROM notes WHERE id = :id"),
+                    {"id": note.id},
+                )
+            ).mappings().one()
+            assert row["title"].startswith("enc:v1:")
+            assert row["content"].startswith("enc:v1:")
+            assert secret_title not in row["title"]
+            assert secret_content not in row["content"]
+        finally:
+            await close_session(session)
+
+    run(scenario())
+
+
 def test_note_service_lists_notes_oldest_first(tmp_path: Path) -> None:
     async def scenario() -> None:
         session = await make_session(tmp_path)
@@ -131,6 +168,40 @@ def test_note_service_creates_and_reuses_category(tmp_path: Path) -> None:
     run(scenario())
 
 
+def test_note_service_same_category_name_is_independent_per_user(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        session = await make_session(tmp_path)
+        try:
+            service = NoteService(session)
+
+            first = await service.create_note(
+                CreateNoteInput(
+                    telegram_id=1013,
+                    content="First shopping note",
+                    category_name="Shopping",
+                )
+            )
+            second = await service.create_note(
+                CreateNoteInput(
+                    telegram_id=1014,
+                    content="Second shopping note",
+                    category_name="shopping",
+                )
+            )
+
+            assert first.category_name == "Shopping"
+            assert second.category_name == "shopping"
+            assert first.category_id != second.category_id
+            assert await service.list_category_names(telegram_id=1013) == ["Shopping"]
+            assert await service.list_category_names(telegram_id=1014) == ["shopping"]
+        finally:
+            await close_session(session)
+
+    run(scenario())
+
+
 def test_note_service_creates_forwarded_text_note(tmp_path: Path) -> None:
     async def scenario() -> None:
         session = await make_session(tmp_path)
@@ -163,6 +234,30 @@ def test_note_service_creates_forwarded_text_note(tmp_path: Path) -> None:
     run(scenario())
 
 
+def test_note_service_does_not_list_foreign_notes(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        session = await make_session(tmp_path)
+        try:
+            service = NoteService(session)
+
+            own = await service.create_note(
+                CreateNoteInput(telegram_id=1004, content="Own note")
+            )
+            foreign = await service.create_note(
+                CreateNoteInput(telegram_id=1005, content="Foreign note")
+            )
+
+            own_notes = await service.list_notes(telegram_id=1004)
+            foreign_notes = await service.list_notes(telegram_id=1005)
+
+            assert [note.id for note in own_notes] == [own.id]
+            assert [note.id for note in foreign_notes] == [foreign.id]
+        finally:
+            await close_session(session)
+
+    run(scenario())
+
+
 def test_note_service_rejects_empty_content_and_foreign_delete(
     tmp_path: Path,
 ) -> None:
@@ -181,6 +276,10 @@ def test_note_service_rejects_empty_content_and_foreign_delete(
             )
             with pytest.raises(NotFoundError):
                 await service.delete_note(telegram_id=9999, note_id=note.id)
+
+            assert [item.id for item in await service.list_notes(telegram_id=1003)] == [
+                note.id
+            ]
         finally:
             await close_session(session)
 
@@ -363,6 +462,42 @@ def test_reminder_service_converts_user_time_to_utc(tmp_path: Path) -> None:
     run(scenario())
 
 
+def test_reminder_service_stores_ciphertext_and_returns_plaintext(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        session = await make_session(tmp_path)
+        try:
+            service = ReminderService(
+                session,
+                settings=Settings(default_timezone="UTC"),
+            )
+            secret_text = "call the doctor"
+
+            reminder = await service.create_reminder(
+                CreateReminderInput(
+                    telegram_id=2010,
+                    text=secret_text,
+                    remind_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                )
+            )
+
+            assert reminder.text == secret_text
+
+            row = (
+                await session.execute(
+                    text("SELECT text FROM reminders WHERE id = :id"),
+                    {"id": reminder.id},
+                )
+            ).mappings().one()
+            assert row["text"].startswith("enc:v1:")
+            assert secret_text not in row["text"]
+        finally:
+            await close_session(session)
+
+    run(scenario())
+
+
 def test_reminder_service_rejects_past_time_and_cancels_only_owner(
     tmp_path: Path,
 ) -> None:
@@ -395,12 +530,58 @@ def test_reminder_service_rejects_past_time_and_cancels_only_owner(
                     telegram_id=9999,
                     reminder_id=reminder.id,
                 )
+            listed = await service.list_reminders(
+                telegram_id=2002,
+                status="scheduled",
+            )
+            assert [item.id for item in listed] == [reminder.id]
 
             cancelled = await service.cancel_reminder(
                 telegram_id=2002,
                 reminder_id=reminder.id,
             )
             assert cancelled.status == "cancelled"
+        finally:
+            await close_session(session)
+
+    run(scenario())
+
+
+def test_reminder_service_does_not_list_foreign_reminders(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        session = await make_session(tmp_path)
+        try:
+            service = ReminderService(
+                session,
+                settings=Settings(default_timezone="UTC"),
+            )
+
+            own = await service.create_reminder(
+                CreateReminderInput(
+                    telegram_id=2003,
+                    text="Own reminder",
+                    remind_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                )
+            )
+            foreign = await service.create_reminder(
+                CreateReminderInput(
+                    telegram_id=2004,
+                    text="Foreign reminder",
+                    remind_at=datetime.now(timezone.utc) + timedelta(hours=2),
+                )
+            )
+
+            own_reminders = await service.list_reminders(
+                telegram_id=2003,
+                status="scheduled",
+            )
+            foreign_reminders = await service.list_reminders(
+                telegram_id=2004,
+                status="scheduled",
+            )
+
+            assert [item.id for item in own_reminders] == [own.id]
+            assert [item.id for item in foreign_reminders] == [foreign.id]
         finally:
             await close_session(session)
 
@@ -570,3 +751,89 @@ def test_dialog_service_active_state_lifecycle(tmp_path: Path) -> None:
             await close_session(session)
 
     run(scenario())
+
+
+def test_dialog_service_stores_encrypted_payload_and_returns_plaintext(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        session = await make_session(tmp_path)
+        try:
+            service = DialogService(
+                session,
+                settings=Settings(default_timezone="UTC"),
+            )
+            secret_payload = {"draft": "secret dialog text"}
+
+            state = await service.create_dialog_state(
+                CreateDialogStateInput(
+                    telegram_id=3010,
+                    state_type="create_note",
+                    payload=secret_payload,
+                )
+            )
+
+            assert state.payload == secret_payload
+
+            row = (
+                await session.execute(
+                    text("SELECT payload FROM dialog_states WHERE id = :id"),
+                    {"id": state.id},
+                )
+            ).mappings().one()
+            assert row["payload"].startswith("enc:v1:")
+            assert "secret dialog text" not in row["payload"]
+        finally:
+            await close_session(session)
+
+    run(scenario())
+
+
+def test_dialog_service_active_state_is_independent_per_user(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        session = await make_session(tmp_path)
+        try:
+            service = DialogService(
+                session,
+                settings=Settings(default_timezone="UTC"),
+            )
+
+            first = await service.create_dialog_state(
+                CreateDialogStateInput(
+                    telegram_id=3002,
+                    state_type="create_note_category",
+                    payload={"draft": "first"},
+                )
+            )
+            second = await service.create_dialog_state(
+                CreateDialogStateInput(
+                    telegram_id=3003,
+                    state_type="confirm_delete_notes",
+                    payload={"draft": "second"},
+                )
+            )
+
+            assert first.user_id != second.user_id
+            await service.complete_dialog_state(telegram_id=3003)
+
+            first_active = await service.get_active_dialog_state(telegram_id=3002)
+            second_active = await service.get_active_dialog_state(telegram_id=3003)
+
+            assert first_active is not None
+            assert first_active.id == first.id
+            assert first_active.payload == {"draft": "first"}
+            assert second_active is None
+        finally:
+            await close_session(session)
+
+    run(scenario())
+
+
+def test_encryption_key_is_required_when_enabled() -> None:
+    with pytest.raises(PydanticValidationError):
+        Settings(encryption_enabled=True, app_encryption_key="")
+
+
+def test_encryption_key_must_be_valid_fernet_key() -> None:
+    with pytest.raises(PydanticValidationError):
+        Settings(encryption_enabled=True, app_encryption_key="not-a-fernet-key")

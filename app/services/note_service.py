@@ -4,6 +4,7 @@ from app.common.errors import NotFoundError, ValidationError
 from app.repositories import NoteCategoryRepository, NoteRepository, UserRepository
 from app.repositories.note_category_repository import normalize_category_name
 from app.schemas.note import CreateForwardedNoteInput, CreateNoteInput, NoteRead
+from app.security.encryption import decrypt_text
 
 
 class NoteService:
@@ -33,7 +34,7 @@ class NoteService:
             language=data.language,
         )
         await self.session.commit()
-        return NoteRead.model_validate(note)
+        return self._to_read(note)
 
     async def create_forwarded_text_note(
         self,
@@ -62,7 +63,7 @@ class NoteService:
             language=data.language,
         )
         await self.session.commit()
-        return NoteRead.model_validate(note)
+        return self._to_read(note)
 
     async def list_notes(self, *, telegram_id: int, limit: int = 20) -> list[NoteRead]:
         if limit <= 0:
@@ -71,7 +72,7 @@ class NoteService:
         if user is None:
             return []
         notes = await self.notes.list_for_user(user.id, limit=limit)
-        return [NoteRead.model_validate(note) for note in notes]
+        return [self._to_read(note) for note in notes]
 
     async def list_category_names(self, *, telegram_id: int) -> list[str]:
         user = await self.users.get_by_telegram_id(telegram_id)
@@ -221,3 +222,21 @@ class NoteService:
         if cleaned is None:
             return None
         return await self.categories.get_or_create(user_id=user_id, name=cleaned)
+
+    def _to_read(self, note) -> NoteRead:
+        return NoteRead(
+            id=note.id,
+            user_id=note.user_id,
+            category_id=note.category_id,
+            category_name=note.category_name,
+            title=decrypt_text(note.title),
+            content=decrypt_text(note.content) or "",
+            source_type=note.source_type,
+            source_chat_id=note.source_chat_id,
+            source_chat_title=decrypt_text(note.source_chat_title),
+            source_message_id=note.source_message_id,
+            forward_sender_name=decrypt_text(note.forward_sender_name),
+            language=note.language,
+            created_at=note.created_at,
+            updated_at=note.updated_at,
+        )

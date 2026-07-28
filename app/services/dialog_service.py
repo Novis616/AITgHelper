@@ -6,6 +6,7 @@ from app.common.errors import NotFoundError, ValidationError
 from app.config.settings import Settings, get_settings
 from app.repositories import DialogStateRepository, UserRepository
 from app.schemas.dialog_state import CreateDialogStateInput, DialogStateRead
+from app.security.encryption import decrypt_json
 
 
 class DialogService:
@@ -45,7 +46,7 @@ class DialogService:
             status="active",
         )
         await self.session.commit()
-        return DialogStateRead.model_validate(state)
+        return self._to_read(state)
 
     async def get_active_dialog_state(
         self,
@@ -58,7 +59,7 @@ class DialogService:
         state = await self.states.get_active_for_user(user.id)
         if state is None:
             return None
-        return DialogStateRead.model_validate(state)
+        return self._to_read(state)
 
     async def update_payload(
         self,
@@ -74,7 +75,7 @@ class DialogService:
             raise NotFoundError("Active dialog state not found")
         state = await self.states.update_payload(state, payload)
         await self.session.commit()
-        return DialogStateRead.model_validate(state)
+        return self._to_read(state)
 
     async def complete_dialog_state(self, *, telegram_id: int) -> DialogStateRead:
         return await self._finish_active(telegram_id=telegram_id, action="complete")
@@ -100,4 +101,16 @@ class DialogService:
         else:
             state = await self.states.cancel(state)
         await self.session.commit()
-        return DialogStateRead.model_validate(state)
+        return self._to_read(state)
+
+    def _to_read(self, state) -> DialogStateRead:
+        return DialogStateRead(
+            id=state.id,
+            user_id=state.user_id,
+            state_type=state.state_type,
+            status=state.status,
+            payload=decrypt_json(state.payload),
+            expires_at=state.expires_at,
+            created_at=state.created_at,
+            updated_at=state.updated_at,
+        )

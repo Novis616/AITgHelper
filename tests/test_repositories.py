@@ -122,6 +122,46 @@ def test_note_category_repository_normalizes_names(tmp_path: Path) -> None:
     run(scenario())
 
 
+def test_note_category_repository_scopes_same_name_per_user(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        session = await make_session(tmp_path)
+        try:
+            users = UserRepository(session)
+            categories = NoteCategoryRepository(session)
+            first_user = await users.create(telegram_id=2003)
+            second_user = await users.create(telegram_id=2004)
+
+            first = await categories.get_or_create(
+                user_id=first_user.id,
+                name="Shopping",
+            )
+            second = await categories.get_or_create(
+                user_id=second_user.id,
+                name="shopping",
+            )
+            await session.commit()
+
+            assert first.id != second.id
+            assert await categories.get_by_normalized_name(
+                user_id=first_user.id,
+                normalized_name="shopping",
+            ) == first
+            assert await categories.get_by_normalized_name(
+                user_id=second_user.id,
+                normalized_name="shopping",
+            ) == second
+            assert [item.id for item in await categories.list_for_user(first_user.id)] == [
+                first.id
+            ]
+            assert [
+                item.id for item in await categories.list_for_user(second_user.id)
+            ] == [second.id]
+        finally:
+            await close_session(session)
+
+    run(scenario())
+
+
 def test_reminder_repository_status_and_due_queries(tmp_path: Path) -> None:
     async def scenario() -> None:
         session = await make_session(tmp_path)
@@ -217,6 +257,44 @@ def test_ai_request_log_repository_create_and_list(tmp_path: Path) -> None:
             assert [item.id for item in listed] == [log.id]
             assert listed[0].normalized_intent == "create_note"
             assert listed[0].error_text is None
+        finally:
+            await close_session(session)
+
+    run(scenario())
+
+
+def test_ai_request_log_repository_lists_only_current_user_logs(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        session = await make_session(tmp_path)
+        try:
+            users = UserRepository(session)
+            logs = AiRequestLogRepository(session)
+            first_user = await users.create(telegram_id=5002)
+            second_user = await users.create(telegram_id=5003)
+
+            first_log = await logs.create(
+                user_id=first_user.id,
+                provider="openai",
+                model="test-model",
+                user_text="First private text",
+                normalized_intent="create_note",
+            )
+            second_log = await logs.create(
+                user_id=second_user.id,
+                provider="openai",
+                model="test-model",
+                user_text="Second private text",
+                normalized_intent="create_reminder",
+            )
+            await session.commit()
+
+            first_listed = await logs.list_for_user(first_user.id)
+            second_listed = await logs.list_for_user(second_user.id)
+
+            assert [item.id for item in first_listed] == [first_log.id]
+            assert [item.id for item in second_listed] == [second_log.id]
         finally:
             await close_session(session)
 

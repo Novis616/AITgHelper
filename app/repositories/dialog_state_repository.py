@@ -5,6 +5,7 @@ from sqlalchemy import Select, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.dialog_state import DialogState
+from app.security.encryption import encrypt_json
 
 
 class DialogStateRepository:
@@ -23,7 +24,7 @@ class DialogStateRepository:
         state = DialogState(
             user_id=user_id,
             state_type=state_type,
-            payload=payload or {},
+            payload=encrypt_json(payload),
             expires_at=expires_at,
             status=status,
         )
@@ -47,7 +48,7 @@ class DialogStateRepository:
         state: DialogState,
         payload: dict[str, Any],
     ) -> DialogState:
-        state.payload = payload
+        state.payload = encrypt_json(payload)
         await self.session.flush()
         return state
 

@@ -5,6 +5,7 @@ from app.common.time import to_utc, utc_now
 from app.config.settings import Settings, get_settings
 from app.repositories import ReminderRepository, UserRepository
 from app.schemas.reminder import CreateReminderInput, ReminderRead
+from app.security.encryption import decrypt_text
 
 
 class ReminderService:
@@ -43,7 +44,7 @@ class ReminderService:
             status="scheduled",
         )
         await self.session.commit()
-        return ReminderRead.model_validate(reminder)
+        return self._to_read(reminder)
 
     async def list_reminders(
         self,
@@ -62,7 +63,7 @@ class ReminderService:
             status=status,
             limit=limit,
         )
-        return [ReminderRead.model_validate(reminder) for reminder in reminders]
+        return [self._to_read(reminder) for reminder in reminders]
 
     async def cancel_reminder(self, *, telegram_id: int, reminder_id: int) -> ReminderRead:
         user = await self.users.get_by_telegram_id(telegram_id)
@@ -74,7 +75,7 @@ class ReminderService:
 
         reminder = await self.reminders.cancel(reminder)
         await self.session.commit()
-        return ReminderRead.model_validate(reminder)
+        return self._to_read(reminder)
 
     async def count_scheduled_reminders(self, *, telegram_id: int) -> int:
         user = await self.users.get_by_telegram_id(telegram_id)
@@ -145,3 +146,16 @@ class ReminderService:
         if not clean_ids:
             raise ValidationError("reminder_ids must not be empty")
         return clean_ids
+
+    def _to_read(self, reminder) -> ReminderRead:
+        return ReminderRead(
+            id=reminder.id,
+            user_id=reminder.user_id,
+            text=decrypt_text(reminder.text) or "",
+            remind_at_utc=reminder.remind_at_utc,
+            timezone=reminder.timezone,
+            status=reminder.status,
+            created_at=reminder.created_at,
+            sent_at=reminder.sent_at,
+            error_text=decrypt_text(reminder.error_text),
+        )

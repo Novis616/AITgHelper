@@ -2,3 +2,4 @@ import os
 
 
 os.environ["ALLOWED_TELEGRAM_USER_IDS"] = ""
+os.environ["APP_ENCRYPTION_KEY"] = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="

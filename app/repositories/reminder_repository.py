@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.base import utc_now
 from app.models.reminder import Reminder
+from app.security.encryption import encrypt_text
 
 
 class ReminderRepository:
@@ -22,7 +23,7 @@ class ReminderRepository:
     ) -> Reminder:
         reminder = Reminder(
             user_id=user_id,
-            text=text,
+            text=encrypt_text(text) or "",
             remind_at_utc=remind_at_utc,
             timezone=timezone,
             status=status,
@@ -118,7 +119,7 @@ class ReminderRepository:
 
     async def mark_failed(self, reminder: Reminder, *, error_text: str) -> Reminder:
         reminder.status = "failed"
-        reminder.error_text = error_text
+        reminder.error_text = encrypt_text(error_text)
         await self.session.flush()
         return reminder
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai import OpenAiClient, OpenRouterClient, create_ai_client, parse_intent_response
@@ -175,6 +176,56 @@ def test_ai_interpretation_service_logs_fallback_on_error(tmp_path: Path) -> Non
             assert len(logs) == 1
             assert logs[0].normalized_intent == "unknown"
             assert "network is unavailable" in (logs[0].error_text or "")
+        finally:
+            await close_session(session)
+
+    run(scenario())
+
+
+def test_ai_interpretation_service_stores_sensitive_log_fields_encrypted(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        session = await make_session(tmp_path)
+        try:
+            raw_response = '{"intent":"create_note","parameters":{"content":"secret"}}'
+            service = AiInterpretationService(
+                session,
+                ai_client=FakeAiClient(
+                    result=IntentResult(
+                        intent="create_note",
+                        parameters={"content": "secret"},
+                        confidence=0.88,
+                        raw_response=raw_response,
+                    )
+                ),
+                settings=Settings(default_timezone="UTC"),
+            )
+
+            await service.interpret_message(
+                AiInterpretationInput(
+                    telegram_id=7003,
+                    text="Save secret idea",
+                    language="en",
+                )
+            )
+
+            raw = (
+                await session.execute(
+                    text(
+                        "SELECT user_text, prompt, raw_response "
+                        "FROM ai_request_logs WHERE id = 1"
+                    )
+                )
+            ).mappings().one()
+            for value in raw.values():
+                assert value.startswith("enc:v1:")
+            assert "Save secret idea" not in raw["user_text"]
+            assert "secret" not in raw["raw_response"]
+
+            logs = await AiRequestLogRepository(session).list_for_user(1)
+            assert logs[0].user_text == "Save secret idea"
+            assert logs[0].raw_response == raw_response
         finally:
             await close_session(session)
 

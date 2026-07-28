@@ -11,6 +11,7 @@ from app.repositories import ReminderRepository, UserRepository
 from app.repositories.database import create_engine, create_session_factory
 from app.scheduler.jobs import reminder_message_text
 from app.scheduler import ReminderScheduler, send_reminder_job
+from app.security.encryption import decrypt_text, is_encrypted
 
 
 def run(coro):
@@ -77,7 +78,14 @@ async def get_reminder_status(session_factory, reminder_id: int) -> tuple[str, s
     async with session_factory() as session:
         reminder = await ReminderRepository(session).get_by_id(reminder_id)
         assert reminder is not None
-        return reminder.status, reminder.error_text
+        return reminder.status, decrypt_text(reminder.error_text)
+
+
+async def get_raw_reminder_error_text(session_factory, reminder_id: int) -> str | None:
+    async with session_factory() as session:
+        reminder = await ReminderRepository(session).get_by_id(reminder_id)
+        assert reminder is not None
+        return reminder.error_text
 
 
 def test_send_reminder_job_marks_sent_after_success(tmp_path: Path) -> None:
@@ -146,6 +154,12 @@ def test_send_reminder_job_marks_failed_after_send_error(tmp_path: Path) -> None
             )
             assert status == "failed"
             assert error_text == "telegram is unavailable"
+            raw_error_text = await get_raw_reminder_error_text(
+                session_factory,
+                reminder_id,
+            )
+            assert is_encrypted(raw_error_text)
+            assert "telegram is unavailable" not in (raw_error_text or "")
         finally:
             await engine.dispose()
 

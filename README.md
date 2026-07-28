@@ -64,6 +64,8 @@ AI_MODEL=
 APP_ENV=local
 LOG_LEVEL=INFO
 DEFAULT_TIMEZONE=Europe/Moscow
+ENCRYPTION_ENABLED=true
+APP_ENCRYPTION_KEY=replace-with-generated-fernet-key
 
 DATABASE_URL=sqlite+aiosqlite:///./data/aitghelper.sqlite3
 
@@ -77,6 +79,8 @@ Notes:
 - Set `OPENAI_API_KEY` when `AI_PROVIDER=openai`.
 - Set `OPENROUTER_API_KEY` when `AI_PROVIDER=openrouter`.
 - `AI_MODEL` must contain a model name supported by the selected provider.
+- `APP_ENCRYPTION_KEY` is required when `ENCRYPTION_ENABLED=true`. Use a Fernet
+  key generated locally and keep it only in `.env`.
 - `ALLOWED_TELEGRAM_USER_IDS` is optional. Leave it empty to allow any user who
   can reach the bot, or set comma-separated numeric Telegram user IDs such as
   `123456789,987654321`.
@@ -173,6 +177,11 @@ docker compose run --rm bot python -m alembic upgrade head
 The default SQLite database is stored under `data/`. Local environment files,
 database files, logs, caches, and other runtime artifacts should not be
 committed.
+
+Sensitive user content is encrypted before it is stored in the database. This
+protects against direct reading of the SQLite file, but it does not protect a
+server or application process that is fully compromised and can access the
+runtime encryption key.
 
 Before publishing changes, it is useful to check:
 

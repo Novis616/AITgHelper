@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, JSON, String
+from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
@@ -22,7 +22,7 @@ class DialogState(TimestampMixin, Base):
         nullable=False,
         index=True,
     )
-    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
     expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         index=True,

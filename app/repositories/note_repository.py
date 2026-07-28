@@ -4,6 +4,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models.note import Note
 from app.models.note_category import NoteCategory
+from app.security.encryption import encrypt_text
 
 
 class NoteRepository:
@@ -26,14 +27,14 @@ class NoteRepository:
     ) -> Note:
         note = Note(
             user_id=user_id,
-            title=title,
+            title=encrypt_text(title),
             category=category,
-            content=content,
+            content=encrypt_text(content),
             source_type=source_type,
             source_chat_id=source_chat_id,
-            source_chat_title=source_chat_title,
+            source_chat_title=encrypt_text(source_chat_title),
             source_message_id=source_message_id,
-            forward_sender_name=forward_sender_name,
+            forward_sender_name=encrypt_text(forward_sender_name),
             language=language,
         )
         self.session.add(note)
