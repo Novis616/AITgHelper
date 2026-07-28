@@ -187,6 +187,149 @@ def test_note_service_rejects_empty_content_and_foreign_delete(
     run(scenario())
 
 
+def test_note_service_bulk_deletes_ids_only_for_current_user(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        session = await make_session(tmp_path)
+        try:
+            service = NoteService(session)
+
+            first = await service.create_note(
+                CreateNoteInput(telegram_id=1101, content="First")
+            )
+            second = await service.create_note(
+                CreateNoteInput(telegram_id=1101, content="Second")
+            )
+            foreign = await service.create_note(
+                CreateNoteInput(telegram_id=9999, content="Foreign")
+            )
+
+            with pytest.raises(NotFoundError):
+                await service.delete_notes_by_ids(
+                    telegram_id=1101,
+                    note_ids=[first.id, foreign.id],
+                )
+
+            assert await service.count_existing_notes_by_ids(
+                telegram_id=1101,
+                note_ids=[first.id, foreign.id],
+            ) == 0
+            assert [note.id for note in await service.list_notes(telegram_id=1101)] == [
+                first.id,
+                second.id,
+            ]
+            assert [note.id for note in await service.list_notes(telegram_id=9999)] == [
+                foreign.id
+            ]
+            assert await service.count_existing_notes_by_ids(
+                telegram_id=1101,
+                note_ids=[first.id, second.id],
+            ) == 2
+
+            deleted_count = await service.delete_notes_by_ids(
+                telegram_id=1101,
+                note_ids=[first.id, second.id],
+            )
+
+            assert deleted_count == 2
+            assert await service.list_notes(telegram_id=1101) == []
+            assert [note.id for note in await service.list_notes(telegram_id=9999)] == [
+                foreign.id
+            ]
+        finally:
+            await close_session(session)
+
+    run(scenario())
+
+
+def test_note_service_deletes_category_notes_but_keeps_category(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        session = await make_session(tmp_path)
+        try:
+            service = NoteService(session)
+
+            await service.create_note(
+                CreateNoteInput(
+                    telegram_id=1102,
+                    content="Buy milk",
+                    category_name="Shopping",
+                )
+            )
+            await service.create_note(
+                CreateNoteInput(
+                    telegram_id=1102,
+                    content="Buy bread",
+                    category_name="shopping",
+                )
+            )
+            keep = await service.create_note(
+                CreateNoteInput(
+                    telegram_id=1102,
+                    content="Project idea",
+                    category_name="Ideas",
+                )
+            )
+            foreign = await service.create_note(
+                CreateNoteInput(
+                    telegram_id=9999,
+                    content="Foreign shopping",
+                    category_name="Shopping",
+                )
+            )
+
+            assert await service.count_notes_by_category(
+                telegram_id=1102,
+                category_name=" shopping ",
+            ) == 2
+
+            deleted_count = await service.delete_notes_by_category(
+                telegram_id=1102,
+                category_name="shopping",
+            )
+
+            assert deleted_count == 2
+            assert [note.id for note in await service.list_notes(telegram_id=1102)] == [
+                keep.id
+            ]
+            assert [note.id for note in await service.list_notes(telegram_id=9999)] == [
+                foreign.id
+            ]
+            assert await service.list_category_names(telegram_id=1102) == [
+                "Ideas",
+                "Shopping",
+            ]
+        finally:
+            await close_session(session)
+
+    run(scenario())
+
+
+def test_note_service_deletes_all_notes_only_for_current_user(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        session = await make_session(tmp_path)
+        try:
+            service = NoteService(session)
+
+            await service.create_note(CreateNoteInput(telegram_id=1103, content="One"))
+            await service.create_note(CreateNoteInput(telegram_id=1103, content="Two"))
+            foreign = await service.create_note(
+                CreateNoteInput(telegram_id=9999, content="Foreign")
+            )
+
+            assert await service.count_notes(telegram_id=1103) == 2
+
+            deleted_count = await service.delete_all_notes(telegram_id=1103)
+
+            assert deleted_count == 2
+            assert await service.list_notes(telegram_id=1103) == []
+            assert [note.id for note in await service.list_notes(telegram_id=9999)] == [
+                foreign.id
+            ]
+        finally:
+            await close_session(session)
+
+    run(scenario())
+
+
 def test_reminder_service_converts_user_time_to_utc(tmp_path: Path) -> None:
     async def scenario() -> None:
         session = await make_session(tmp_path)

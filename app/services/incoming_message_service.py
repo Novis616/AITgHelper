@@ -9,10 +9,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.common.time import utc_now
 from app.services.incoming_message_responses import (
     category_clarification_text,
+    category_notes_not_found_text,
     clarification_text,
+    delete_notes_cancelled_text,
+    delete_notes_confirmation_text,
+    deleted_all_notes_text,
+    deleted_notes_by_category_text,
+    deleted_notes_by_ids_text,
     deleted_text,
+    invalid_delete_confirmation_text,
     list_notes_text,
     list_reminders_text,
+    notes_not_found_text,
     not_found_text,
     note_saved_text,
     reminder_cannot_cancel_text,
@@ -86,28 +94,34 @@ class IncomingMessageService:
         )
         if (
             active_dialog is not None
+            and active_dialog.state_type == "confirm_delete_notes"
+        ):
+            answer = await self._complete_delete_confirmation_dialog(
+                message,
+                active_dialog,
+            )
+            return IncomingMessageResult(
+                text=answer,
+                intent="delete_note",
+                parameters=dict(active_dialog.payload),
+            )
+        if (
+            active_dialog is not None
             and active_dialog.state_type == "create_note_category"
         ):
             note = await self._complete_note_category_dialog(message, active_dialog)
             return IncomingMessageResult(
-                text=note_saved_text(note, message.language, forwarded=False),
+                text=note_saved_text(
+                    note,
+                    message.language,
+                    forwarded=note.source_type == "forwarded",
+                ),
                 intent="create_note",
                 parameters={"category_name": note.category_name},
             )
 
         if message.is_forwarded:
-            note = await self.note_service.create_forwarded_text_note(
-                CreateForwardedNoteInput(
-                    telegram_id=message.telegram_id,
-                    content=text,
-                    language=message.language,
-                    forward=message.forward or ForwardInfo(),
-                )
-            )
-            return IncomingMessageResult(
-                text=note_saved_text(note, message.language, forwarded=True),
-                intent="create_note",
-            )
+            return await self._handle_forwarded_text_message(message, text)
 
         known_categories = await self._known_categories(message.telegram_id)
         intent = await self.ai_service.interpret_message(
@@ -125,6 +139,69 @@ class IncomingMessageService:
             text=answer,
             intent=intent.intent,
             parameters=dict(intent.parameters),
+        )
+
+    async def _handle_forwarded_text_message(
+        self,
+        message: IncomingTextMessage,
+        text: str,
+    ) -> IncomingMessageResult:
+        intent = IntentResult(intent="unknown")
+        try:
+            known_categories = await self._known_categories(message.telegram_id)
+            intent = await self.ai_service.interpret_message(
+                AiInterpretationInput(
+                    telegram_id=message.telegram_id,
+                    text=text,
+                    language=message.language,
+                    source_type="forwarded",
+                    timezone=message.timezone or self.settings.default_timezone,
+                    known_categories=known_categories,
+                )
+            )
+        except Exception:
+            intent = IntentResult(intent="unknown")
+
+        parameters = intent.parameters
+        category_name = self._optional_text(parameters, "category_name", "category")
+        missing_fields = self._missing_fields(parameters)
+        if "category" in missing_fields or (
+            self._optional_bool(parameters, "category_required")
+            and category_name is None
+        ):
+            question = await self._ask_for_missing_data(
+                message,
+                intent,
+                ["category"],
+                question=(
+                    intent.clarification_question
+                    or category_clarification_text(message.language)
+                ),
+                state_type="create_note_category",
+                extra_payload={
+                    "source_type": "forwarded",
+                    "forward": (message.forward or ForwardInfo()).model_dump(),
+                },
+            )
+            return IncomingMessageResult(
+                text=question,
+                intent="create_note",
+                parameters=dict(parameters),
+            )
+
+        note = await self.note_service.create_forwarded_text_note(
+            CreateForwardedNoteInput(
+                telegram_id=message.telegram_id,
+                content=text,
+                category_name=category_name,
+                language=message.language,
+                forward=message.forward or ForwardInfo(),
+            )
+        )
+        return IncomingMessageResult(
+            text=note_saved_text(note, message.language, forwarded=True),
+            intent="create_note",
+            parameters=dict(parameters),
         )
 
     async def _apply_intent(
@@ -168,6 +245,57 @@ class IncomingMessageService:
             return list_notes_text(notes, message.language)
 
         if intent.intent == "delete_note":
+            delete_scope = self._optional_text(parameters, "delete_scope")
+            note_ids = self._optional_int_list(parameters, "note_ids", "ids")
+            delete_all = self._optional_bool(parameters, "delete_all")
+            category_name = self._optional_text(parameters, "category_name", "category")
+
+            if delete_scope == "all" or delete_all:
+                return await self._create_delete_confirmation(
+                    message,
+                    operation_type="delete_all_notes",
+                    count=await self.note_service.count_notes(
+                        telegram_id=message.telegram_id,
+                    ),
+                    payload={"delete_all": True},
+                    not_found_message=notes_not_found_text(message.language),
+                )
+
+            if delete_scope == "category" or (
+                category_name is not None and note_ids is None
+            ):
+                if category_name is None:
+                    return await self._ask_for_missing_data(
+                        message,
+                        intent,
+                        ["category"],
+                    )
+                return await self._create_delete_confirmation(
+                    message,
+                    operation_type="delete_notes_by_category",
+                    count=await self.note_service.count_notes_by_category(
+                        telegram_id=message.telegram_id,
+                        category_name=category_name,
+                    ),
+                    payload={"category_name": category_name},
+                    not_found_message=category_notes_not_found_text(
+                        category_name,
+                        message.language,
+                    ),
+                )
+
+            if note_ids is not None:
+                return await self._create_delete_confirmation(
+                    message,
+                    operation_type="delete_note_ids",
+                    count=await self.note_service.count_existing_notes_by_ids(
+                        telegram_id=message.telegram_id,
+                        note_ids=note_ids,
+                    ),
+                    payload={"note_ids": note_ids},
+                    not_found_message=notes_not_found_text(message.language),
+                )
+
             note_id = self._optional_int(parameters, "id", "note_id")
             if note_id is None:
                 return await self._ask_for_missing_data(message, intent, ["id"])
@@ -251,6 +379,96 @@ class IncomingMessageService:
 
         return await self._ask_for_missing_data(message, intent, [])
 
+    async def _create_delete_confirmation(
+        self,
+        message: IncomingTextMessage,
+        *,
+        operation_type: str,
+        count: int,
+        payload: dict[str, Any],
+        not_found_message: str,
+    ) -> str:
+        if count <= 0:
+            return not_found_message
+        await self.dialog_service.create_dialog_state(
+            CreateDialogStateInput(
+                telegram_id=message.telegram_id,
+                state_type="confirm_delete_notes",
+                payload={
+                    "operation_type": operation_type,
+                    "count_preview": count,
+                    **payload,
+                },
+                language=message.language,
+                timezone=message.timezone or self.settings.default_timezone,
+            )
+        )
+        return delete_notes_confirmation_text(message.language)
+
+    async def _complete_delete_confirmation_dialog(
+        self,
+        message: IncomingTextMessage,
+        active_dialog,
+    ) -> str:
+        answer = self._confirmation_answer(message.text)
+        if answer is None:
+            return invalid_delete_confirmation_text(message.language)
+
+        if answer is False:
+            await self.dialog_service.cancel_dialog_state(
+                telegram_id=message.telegram_id,
+            )
+            return delete_notes_cancelled_text(message.language)
+
+        payload = dict(active_dialog.payload)
+        operation_type = str(payload.get("operation_type") or "")
+        try:
+            if operation_type == "delete_note_ids":
+                note_ids = self._coerce_int_list(payload.get("note_ids"))
+                deleted_count = await self.note_service.delete_notes_by_ids(
+                    telegram_id=message.telegram_id,
+                    note_ids=note_ids,
+                )
+                await self.dialog_service.complete_dialog_state(
+                    telegram_id=message.telegram_id,
+                )
+                return deleted_notes_by_ids_text(deleted_count, message.language)
+
+            if operation_type == "delete_notes_by_category":
+                category_name = str(payload.get("category_name") or "").strip()
+                deleted_count = await self.note_service.delete_notes_by_category(
+                    telegram_id=message.telegram_id,
+                    category_name=category_name,
+                )
+                await self.dialog_service.complete_dialog_state(
+                    telegram_id=message.telegram_id,
+                )
+                return deleted_notes_by_category_text(
+                    deleted_count,
+                    category_name,
+                    message.language,
+                )
+
+            if operation_type == "delete_all_notes":
+                deleted_count = await self.note_service.delete_all_notes(
+                    telegram_id=message.telegram_id,
+                )
+                await self.dialog_service.complete_dialog_state(
+                    telegram_id=message.telegram_id,
+                )
+                return deleted_all_notes_text(deleted_count, message.language)
+        except (NotFoundError, ValidationError):
+            await self.dialog_service.complete_dialog_state(
+                telegram_id=message.telegram_id,
+            )
+            if operation_type == "delete_notes_by_category":
+                category_name = str(payload.get("category_name") or "").strip()
+                return category_notes_not_found_text(category_name, message.language)
+            return notes_not_found_text(message.language)
+
+        await self.dialog_service.complete_dialog_state(telegram_id=message.telegram_id)
+        return notes_not_found_text(message.language)
+
     async def _ask_for_missing_data(
         self,
         message: IncomingTextMessage,
@@ -259,17 +477,21 @@ class IncomingMessageService:
         *,
         question: str | None = None,
         state_type: str | None = None,
+        extra_payload: dict[str, Any] | None = None,
     ) -> str:
+        payload = {
+            "original_text": message.text,
+            "intent": intent.intent,
+            "parameters": dict(intent.parameters),
+            "missing_fields": missing_fields,
+        }
+        if extra_payload:
+            payload.update(extra_payload)
         await self.dialog_service.create_dialog_state(
             CreateDialogStateInput(
                 telegram_id=message.telegram_id,
                 state_type=state_type or intent.intent,
-                payload={
-                    "original_text": message.text,
-                    "intent": intent.intent,
-                    "parameters": dict(intent.parameters),
-                    "missing_fields": missing_fields,
-                },
+                payload=payload,
                 language=message.language,
                 timezone=message.timezone or self.settings.default_timezone,
             )
@@ -289,15 +511,32 @@ class IncomingMessageService:
         if not isinstance(parameters, dict):
             parameters = {}
         content = self._optional_text(parameters, "content", "text", "note")
-        note = await self.note_service.create_note(
-            CreateNoteInput(
-                telegram_id=message.telegram_id,
-                content=content or str(payload.get("original_text") or "").strip(),
-                title=self._optional_text(parameters, "title"),
-                category_name=message.text,
-                language=message.language,
+        source_type = str(payload.get("source_type") or "").strip()
+        if source_type == "forwarded":
+            forward_payload = payload.get("forward")
+            if not isinstance(forward_payload, dict):
+                forward_payload = {}
+            original_text = str(payload.get("original_text") or "").strip()
+            note = await self.note_service.create_forwarded_text_note(
+                CreateForwardedNoteInput(
+                    telegram_id=message.telegram_id,
+                    content=original_text,
+                    title=self._optional_text(parameters, "title"),
+                    category_name=message.text,
+                    forward=ForwardInfo.model_validate(forward_payload),
+                    language=message.language,
+                )
             )
-        )
+        else:
+            note = await self.note_service.create_note(
+                CreateNoteInput(
+                    telegram_id=message.telegram_id,
+                    content=content or str(payload.get("original_text") or "").strip(),
+                    title=self._optional_text(parameters, "title"),
+                    category_name=message.text,
+                    language=message.language,
+                )
+            )
         await self.dialog_service.complete_dialog_state(
             telegram_id=message.telegram_id,
         )
@@ -330,6 +569,34 @@ class IncomingMessageService:
                 continue
         return None
 
+    def _optional_int_list(
+        self,
+        parameters: dict[str, Any],
+        *keys: str,
+    ) -> list[int] | None:
+        for key in keys:
+            value = parameters.get(key)
+            note_ids = self._coerce_int_list(value)
+            if note_ids:
+                return note_ids
+        return None
+
+    def _coerce_int_list(self, value: Any) -> list[int]:
+        if value is None:
+            return []
+        raw_items = value if isinstance(value, list) else [value]
+        ids: list[int] = []
+        seen: set[int] = set()
+        for item in raw_items:
+            try:
+                note_id = int(str(item).strip())
+            except ValueError:
+                continue
+            if note_id > 0 and note_id not in seen:
+                ids.append(note_id)
+                seen.add(note_id)
+        return ids
+
     def _optional_bool(self, parameters: dict[str, Any], *keys: str) -> bool:
         for key in keys:
             value = parameters.get(key)
@@ -344,6 +611,14 @@ class IncomingMessageService:
         if not isinstance(value, list):
             return []
         return [str(item).strip() for item in value if str(item).strip()]
+
+    def _confirmation_answer(self, value: str) -> bool | None:
+        text = value.strip().casefold()
+        if text in {"да", "д", "yes", "y"}:
+            return True
+        if text in {"нет", "не", "н", "no", "n"}:
+            return False
+        return None
 
     def _optional_datetime(
         self,

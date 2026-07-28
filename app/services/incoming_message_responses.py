@@ -78,6 +78,58 @@ def deleted_text(item_type: str, item_id: int, language: str) -> str:
     return f"Удалил заметку #{item_id}."
 
 
+def delete_notes_confirmation_text(language: str) -> str:
+    if _is_en(language):
+        return "Delete? Yes/No"
+    return "Удаляем? Да/Нет"
+
+
+def delete_notes_cancelled_text(language: str) -> str:
+    if _is_en(language):
+        return "Deletion cancelled."
+    return "Удаление отменено."
+
+
+def invalid_delete_confirmation_text(language: str) -> str:
+    if _is_en(language):
+        return 'Please answer "Yes" or "No".'
+    return 'Пожалуйста, ответь "Да" или "Нет".'
+
+
+def deleted_notes_by_ids_text(count: int, language: str) -> str:
+    if _is_en(language):
+        return f"Deleted {count} note(s)."
+    return f"Удалил заметок: {count}."
+
+
+def deleted_notes_by_category_text(
+    count: int,
+    category_name: str,
+    language: str,
+) -> str:
+    if _is_en(language):
+        return f'Deleted {count} note(s) from category "{category_name}".'
+    return f'Удалил заметок из категории "{category_name}": {count}.'
+
+
+def deleted_all_notes_text(count: int, language: str) -> str:
+    if _is_en(language):
+        return f"Deleted all notes: {count}."
+    return f"Удалил все заметки: {count}."
+
+
+def notes_not_found_text(language: str) -> str:
+    if _is_en(language):
+        return "I could not find those notes."
+    return "Не нашел такие заметки."
+
+
+def category_notes_not_found_text(category_name: str, language: str) -> str:
+    if _is_en(language):
+        return f'I could not find notes in category "{category_name}".'
+    return f'Не нашел заметки в категории "{category_name}".'
+
+
 def not_found_text(item_type: str, language: str) -> str:
     if item_type == "reminder":
         if _is_en(language):

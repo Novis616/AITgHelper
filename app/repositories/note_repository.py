@@ -58,6 +58,46 @@ class NoteRepository:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_by_ids_for_user(self, user_id: int, note_ids: list[int]) -> list[Note]:
+        if not note_ids:
+            return []
+        stmt: Select[tuple[Note]] = (
+            select(Note)
+            .options(selectinload(Note.category))
+            .where(Note.user_id == user_id)
+            .where(Note.id.in_(note_ids))
+            .order_by(Note.id)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_by_category_for_user(
+        self,
+        *,
+        user_id: int,
+        category_id: int,
+    ) -> list[Note]:
+        stmt: Select[tuple[Note]] = (
+            select(Note)
+            .options(selectinload(Note.category))
+            .where(Note.user_id == user_id)
+            .where(Note.category_id == category_id)
+            .order_by(Note.created_at, Note.id)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def count_for_user(self, user_id: int) -> int:
+        stmt = select(Note.id).where(Note.user_id == user_id)
+        result = await self.session.execute(stmt)
+        return len(result.scalars().all())
+
     async def delete(self, note: Note) -> None:
         await self.session.delete(note)
         await self.session.flush()
+
+    async def delete_many(self, notes: list[Note]) -> int:
+        for note in notes:
+            await self.session.delete(note)
+        await self.session.flush()
+        return len(notes)

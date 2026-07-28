@@ -10,6 +10,7 @@ from app.schemas import (
     CreateForwardedNoteInput,
     CreateNoteInput,
     CreateReminderInput,
+    ForwardInfo,
     IncomingTextMessage,
     IntentResult,
     NoteRead,
@@ -34,11 +35,22 @@ class FakeAiService:
         return self.result
 
 
+class RaisingAiService(FakeAiService):
+    async def interpret_message(self, input_data):
+        self.calls.append(input_data)
+        raise RuntimeError("AI unavailable")
+
+
 class FakeNoteService:
     def __init__(self) -> None:
         self.created: list[CreateNoteInput] = []
         self.forwarded: list[CreateForwardedNoteInput] = []
         self.deleted: list[int] = []
+        self.deleted_many: list[list[int]] = []
+        self.deleted_categories: list[str] = []
+        self.deleted_all = False
+        self.note_count = 3
+        self.category_count = 2
         self.listed = [make_note(note_id=11, content="First note")]
         self.category_names: list[str] = []
 
@@ -56,7 +68,16 @@ class FakeNoteService:
         data: CreateForwardedNoteInput,
     ) -> NoteRead:
         self.forwarded.append(data)
-        return make_note(note_id=2, content=data.content, source_type="forwarded")
+        return make_note(
+            note_id=2,
+            content=data.content,
+            source_type="forwarded",
+            category_name=data.category_name,
+            source_chat_id=data.forward.source_chat_id,
+            source_chat_title=data.forward.source_chat_title,
+            source_message_id=data.forward.source_message_id,
+            forward_sender_name=data.forward.forward_sender_name,
+        )
 
     async def list_notes(self, *, telegram_id: int, limit: int = 20) -> list[NoteRead]:
         return self.listed
@@ -66,6 +87,49 @@ class FakeNoteService:
 
     async def delete_note(self, *, telegram_id: int, note_id: int) -> None:
         self.deleted.append(note_id)
+
+    async def count_notes(self, *, telegram_id: int) -> int:
+        return self.note_count
+
+    async def count_notes_by_category(
+        self,
+        *,
+        telegram_id: int,
+        category_name: str,
+    ) -> int:
+        return self.category_count
+
+    async def count_existing_notes_by_ids(
+        self,
+        *,
+        telegram_id: int,
+        note_ids: list[int],
+    ) -> int:
+        if self.note_count <= 0:
+            return 0
+        return len(note_ids)
+
+    async def delete_notes_by_ids(
+        self,
+        *,
+        telegram_id: int,
+        note_ids: list[int],
+    ) -> int:
+        self.deleted_many.append(note_ids)
+        return len(note_ids)
+
+    async def delete_notes_by_category(
+        self,
+        *,
+        telegram_id: int,
+        category_name: str,
+    ) -> int:
+        self.deleted_categories.append(category_name)
+        return self.category_count
+
+    async def delete_all_notes(self, *, telegram_id: int) -> int:
+        self.deleted_all = True
+        return self.note_count
 
 
 class FakeReminderService:
@@ -121,6 +185,11 @@ class FakeDialogService:
         self.active = None
         return None
 
+    async def cancel_dialog_state(self, *, telegram_id: int):
+        self.completed = False
+        self.active = None
+        return None
+
 
 class FakeReminderScheduler:
     def __init__(self) -> None:
@@ -133,12 +202,13 @@ class FakeReminderScheduler:
 def make_service(
     intent: IntentResult,
     *,
+    ai_service: FakeAiService | None = None,
     note_service: FakeNoteService | None = None,
     reminder_service: FakeReminderService | None = None,
     dialog_service: FakeDialogService | None = None,
     reminder_scheduler: FakeReminderScheduler | None = None,
 ) -> tuple[IncomingMessageService, FakeAiService, FakeNoteService, FakeReminderService, FakeDialogService]:
-    ai_service = FakeAiService(intent)
+    ai_service = ai_service or FakeAiService(intent)
     notes = note_service or FakeNoteService()
     reminders = reminder_service or FakeReminderService()
     dialogs = dialog_service or FakeDialogService()
@@ -176,6 +246,10 @@ def make_note(
     language: str = "en",
     category_id: int | None = None,
     category_name: str | None = None,
+    source_chat_id: int | None = None,
+    source_chat_title: str | None = None,
+    source_message_id: int | None = None,
+    forward_sender_name: str | None = None,
 ) -> NoteRead:
     now = datetime.now(timezone.utc)
     return NoteRead(
@@ -186,10 +260,10 @@ def make_note(
         title=None,
         content=content,
         source_type=source_type,
-        source_chat_id=None,
-        source_chat_title=None,
-        source_message_id=None,
-        forward_sender_name=None,
+        source_chat_id=source_chat_id,
+        source_chat_title=source_chat_title,
+        source_message_id=source_message_id,
+        forward_sender_name=forward_sender_name,
         language=language,
         created_at=now,
         updated_at=now,
@@ -378,7 +452,50 @@ def test_incoming_service_completes_category_dialog() -> None:
     run(scenario())
 
 
-def test_incoming_service_keeps_forwarded_text_without_ai_call() -> None:
+def test_incoming_service_saves_forwarded_text_with_ai_category_name() -> None:
+    async def scenario() -> None:
+        notes = FakeNoteService()
+        notes.category_names = ["Shopping"]
+        service, ai, created_notes, _, _ = make_service(
+            IntentResult(
+                intent="create_note",
+                parameters={"category_name": "Shopping"},
+            ),
+            note_service=notes,
+        )
+
+        result = await service.handle_text_message(
+            IncomingTextMessage(
+                telegram_id=42,
+                text="https://ozon.ru/item",
+                language="en",
+                timezone="UTC",
+                source_type="forwarded",
+                forward=ForwardInfo(
+                    source_chat_id=55,
+                    source_chat_title="Deals",
+                    source_message_id=77,
+                    forward_sender_name="OZON",
+                ),
+            )
+        )
+
+        assert result.text == "Done, saved the forwarded message as note #2."
+        assert ai.calls[0].text == "https://ozon.ru/item"
+        assert ai.calls[0].source_type == "forwarded"
+        assert ai.calls[0].known_categories == ["Shopping"]
+        assert created_notes.created == []
+        assert created_notes.forwarded[0].content == "https://ozon.ru/item"
+        assert created_notes.forwarded[0].category_name == "Shopping"
+        assert created_notes.forwarded[0].forward.source_chat_id == 55
+        assert created_notes.forwarded[0].forward.source_chat_title == "Deals"
+        assert created_notes.forwarded[0].forward.source_message_id == 77
+        assert created_notes.forwarded[0].forward.forward_sender_name == "OZON"
+
+    run(scenario())
+
+
+def test_incoming_service_saves_forwarded_text_without_category_on_unknown_ai() -> None:
     async def scenario() -> None:
         service, ai, notes, _, _ = make_service(IntentResult(intent="unknown"))
 
@@ -392,8 +509,126 @@ def test_incoming_service_keeps_forwarded_text_without_ai_call() -> None:
         )
 
         assert result.text == "Done, saved the forwarded message as note #2."
-        assert ai.calls == []
+        assert len(ai.calls) == 1
         assert notes.forwarded[0].content == "Forwarded text"
+        assert notes.forwarded[0].category_name is None
+
+    run(scenario())
+
+
+def test_incoming_service_creates_forwarded_category_clarification() -> None:
+    async def scenario() -> None:
+        service, _, notes, _, dialogs = make_service(
+            IntentResult(
+                intent="create_note",
+                parameters={"missing_fields": ["category"]},
+                clarification_question="Which category?",
+            )
+        )
+
+        result = await service.handle_text_message(
+            IncomingTextMessage(
+                telegram_id=42,
+                text="Forwarded link",
+                language="en",
+                source_type="forwarded",
+                forward=ForwardInfo(
+                    source_chat_id=55,
+                    source_chat_title="Deals",
+                    source_message_id=77,
+                    forward_sender_name="OZON",
+                ),
+            )
+        )
+
+        assert result.text == "Which category?"
+        assert notes.forwarded == []
+        assert dialogs.created[0].state_type == "create_note_category"
+        assert dialogs.created[0].payload["source_type"] == "forwarded"
+        assert dialogs.created[0].payload["original_text"] == "Forwarded link"
+        assert dialogs.created[0].payload["forward"] == {
+            "source_chat_id": 55,
+            "source_chat_title": "Deals",
+            "source_message_id": 77,
+            "forward_sender_name": "OZON",
+        }
+
+    run(scenario())
+
+
+def test_incoming_service_completes_forwarded_category_dialog_with_metadata() -> None:
+    async def scenario() -> None:
+        dialogs = FakeDialogService()
+        now = datetime.now(timezone.utc)
+        dialogs.active = DialogStateRead(
+            id=1,
+            user_id=10,
+            state_type="create_note_category",
+            status="active",
+            payload={
+                "original_text": "https://ozon.ru/item",
+                "source_type": "forwarded",
+                "forward": {
+                    "source_chat_id": 55,
+                    "source_chat_title": "Deals",
+                    "source_message_id": 77,
+                    "forward_sender_name": "OZON",
+                },
+                "parameters": {
+                    "content": "AI-normalized text should not replace original",
+                    "missing_fields": ["category"],
+                },
+                "missing_fields": ["category"],
+            },
+            expires_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        service, ai, notes, _, _ = make_service(
+            IntentResult(intent="unknown"),
+            dialog_service=dialogs,
+        )
+
+        result = await service.handle_text_message(make_message("Shopping"))
+
+        assert result.text == "Done, saved the forwarded message as note #2."
+        assert ai.calls == []
+        assert notes.created == []
+        forwarded = notes.forwarded[0]
+        assert forwarded.content == "https://ozon.ru/item"
+        assert forwarded.category_name == "Shopping"
+        assert forwarded.forward.source_chat_id == 55
+        assert forwarded.forward.source_chat_title == "Deals"
+        assert forwarded.forward.source_message_id == 77
+        assert forwarded.forward.forward_sender_name == "OZON"
+        assert dialogs.completed is True
+
+    run(scenario())
+
+
+def test_incoming_service_saves_forwarded_text_when_ai_fails() -> None:
+    async def scenario() -> None:
+        ai_service = RaisingAiService(IntentResult(intent="unknown"))
+        service, ai, notes, _, _ = make_service(
+            IntentResult(intent="unknown"),
+            ai_service=ai_service,
+        )
+
+        result = await service.handle_text_message(
+            IncomingTextMessage(
+                telegram_id=42,
+                text="Forwarded text",
+                language="en",
+                source_type="forwarded",
+                forward=ForwardInfo(forward_sender_name="Alice"),
+            )
+        )
+
+        assert result.text == "Done, saved the forwarded message as note #2."
+        assert len(ai.calls) == 1
+        assert notes.forwarded[0].content == "Forwarded text"
+        assert notes.forwarded[0].category_name is None
+        assert notes.forwarded[0].forward.forward_sender_name == "Alice"
 
     run(scenario())
 
@@ -410,6 +645,233 @@ def test_incoming_service_maps_list_and_delete() -> None:
         deleted = await delete_service.handle_text_message(make_message("Delete note 11"))
         assert deleted.text == "Deleted note #11."
         assert notes.deleted == [11]
+
+    run(scenario())
+
+
+def test_bulk_delete_ids_creates_confirmation_and_deletes_nothing_before_yes() -> None:
+    async def scenario() -> None:
+        service, _, notes, _, dialogs = make_service(
+            IntentResult(
+                intent="delete_note",
+                parameters={"delete_scope": "ids", "note_ids": [1, 3, 7]},
+            )
+        )
+
+        result = await service.handle_text_message(make_message("delete notes 1, 3, 7"))
+
+        assert result.text == "Delete? Yes/No"
+        assert notes.deleted_many == []
+        assert dialogs.created[0].state_type == "confirm_delete_notes"
+        assert dialogs.created[0].payload == {
+            "operation_type": "delete_note_ids",
+            "count_preview": 3,
+            "note_ids": [1, 3, 7],
+        }
+
+    run(scenario())
+
+
+def test_bulk_delete_ids_returns_not_found_without_confirmation() -> None:
+    async def scenario() -> None:
+        notes = FakeNoteService()
+        notes.note_count = 0
+        service, _, created_notes, _, dialogs = make_service(
+            IntentResult(
+                intent="delete_note",
+                parameters={"delete_scope": "ids", "note_ids": [1, 3, 7]},
+            ),
+            note_service=notes,
+        )
+
+        result = await service.handle_text_message(make_message("delete notes 1, 3, 7"))
+
+        assert result.text == "I could not find those notes."
+        assert created_notes.deleted_many == []
+        assert dialogs.created == []
+
+    run(scenario())
+
+
+def test_bulk_delete_ids_yes_deletes_pending_notes_only() -> None:
+    async def scenario() -> None:
+        dialogs = FakeDialogService()
+        now = datetime.now(timezone.utc)
+        dialogs.active = DialogStateRead(
+            id=1,
+            user_id=10,
+            state_type="confirm_delete_notes",
+            status="active",
+            payload={
+                "operation_type": "delete_note_ids",
+                "count_preview": 3,
+                "note_ids": [1, 3, 7],
+            },
+            expires_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        service, ai, notes, _, _ = make_service(
+            IntentResult(intent="unknown"),
+            dialog_service=dialogs,
+        )
+
+        result = await service.handle_text_message(make_message("Yes"))
+
+        assert result.text == "Deleted 3 note(s)."
+        assert ai.calls == []
+        assert notes.deleted_many == [[1, 3, 7]]
+        assert dialogs.completed is True
+
+    run(scenario())
+
+
+def test_bulk_delete_no_cancels_pending_operation() -> None:
+    async def scenario() -> None:
+        dialogs = FakeDialogService()
+        now = datetime.now(timezone.utc)
+        dialogs.active = DialogStateRead(
+            id=1,
+            user_id=10,
+            state_type="confirm_delete_notes",
+            status="active",
+            payload={
+                "operation_type": "delete_note_ids",
+                "count_preview": 2,
+                "note_ids": [1, 2],
+            },
+            expires_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        service, _, notes, _, _ = make_service(
+            IntentResult(intent="unknown"),
+            dialog_service=dialogs,
+        )
+
+        result = await service.handle_text_message(make_message("No"))
+
+        assert result.text == "Deletion cancelled."
+        assert notes.deleted_many == []
+        assert dialogs.active is None
+
+    run(scenario())
+
+
+def test_bulk_delete_invalid_confirmation_answer_keeps_dialog() -> None:
+    async def scenario() -> None:
+        dialogs = FakeDialogService()
+        now = datetime.now(timezone.utc)
+        dialogs.active = DialogStateRead(
+            id=1,
+            user_id=10,
+            state_type="confirm_delete_notes",
+            status="active",
+            payload={
+                "operation_type": "delete_note_ids",
+                "count_preview": 1,
+                "note_ids": [1],
+            },
+            expires_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        service, _, notes, _, _ = make_service(
+            IntentResult(intent="unknown"),
+            dialog_service=dialogs,
+        )
+
+        result = await service.handle_text_message(make_message("maybe"))
+
+        assert result.text == 'Please answer "Yes" or "No".'
+        assert notes.deleted_many == []
+        assert dialogs.active is not None
+
+    run(scenario())
+
+
+def test_delete_category_notes_creates_confirmation_and_yes_deletes_category_notes() -> None:
+    async def scenario() -> None:
+        service, _, notes, _, dialogs = make_service(
+            IntentResult(
+                intent="delete_note",
+                parameters={
+                    "delete_scope": "category",
+                    "category_name": "Shopping",
+                },
+            )
+        )
+
+        result = await service.handle_text_message(
+            make_message("delete Shopping category notes")
+        )
+
+        assert result.text == "Delete? Yes/No"
+        assert notes.deleted_categories == []
+        assert dialogs.created[0].payload == {
+            "operation_type": "delete_notes_by_category",
+            "count_preview": 2,
+            "category_name": "Shopping",
+        }
+
+        now = datetime.now(timezone.utc)
+        dialogs.active = DialogStateRead(
+            id=1,
+            user_id=10,
+            state_type="confirm_delete_notes",
+            status="active",
+            payload=dialogs.created[0].payload,
+            expires_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+
+        confirmed = await service.handle_text_message(make_message("Yes"))
+
+        assert confirmed.text == 'Deleted 2 note(s) from category "Shopping".'
+        assert notes.deleted_categories == ["Shopping"]
+
+    run(scenario())
+
+
+def test_delete_all_notes_creates_confirmation_and_yes_deletes_all_user_notes() -> None:
+    async def scenario() -> None:
+        notes = FakeNoteService()
+        notes.note_count = 4
+        service, _, created_notes, _, dialogs = make_service(
+            IntentResult(
+                intent="delete_note",
+                parameters={"delete_scope": "all", "delete_all": True},
+            ),
+            note_service=notes,
+        )
+
+        result = await service.handle_text_message(make_message("delete all notes"))
+
+        assert result.text == "Delete? Yes/No"
+        assert created_notes.deleted_all is False
+        assert dialogs.created[0].payload == {
+            "operation_type": "delete_all_notes",
+            "count_preview": 4,
+            "delete_all": True,
+        }
+
+        now = datetime.now(timezone.utc)
+        dialogs.active = DialogStateRead(
+            id=1,
+            user_id=10,
+            state_type="confirm_delete_notes",
+            status="active",
+            payload=dialogs.created[0].payload,
+            expires_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+
+        confirmed = await service.handle_text_message(make_message("Yes"))
+
+        assert confirmed.text == "Deleted all notes: 4."
+        assert created_notes.deleted_all is True
 
     run(scenario())
 

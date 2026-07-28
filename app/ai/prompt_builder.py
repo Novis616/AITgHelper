@@ -20,6 +20,8 @@ Rules:
 - Use create_reminder when the user asks to be reminded.
 - Use list_notes or list_reminders when the user asks to show saved items.
 - Use delete_note or delete_reminder when the user asks to remove an item.
+- Use delete_note for deleting one note, several notes, all notes in a note
+  category, or all notes.
 - Use unknown when intent is unclear.
 - confidence must be a number from 0 to 1.
 - parameters must be an object.
@@ -28,11 +30,21 @@ Rules:
 - Resolve relative reminder times using current_datetime_utc and timezone.
 - For remind_at, always return ISO 8601 datetime, never phrases like "tomorrow" or "in 2 minutes".
 - For notes, include content when available.
+- For deleting notes, include structured parameters:
+  delete_scope: "ids" | "category" | "all".
+- For deleting specific notes, include note_ids as an array of integers, for
+  example {"delete_scope": "ids", "note_ids": [1, 3, 7]}.
+- For deleting notes in a category, include category_name and
+  delete_scope: "category". Do not set delete_all for category deletion.
+- For deleting every note, include delete_scope: "all" and delete_all: true.
+- For deleting a single note, you may return id or note_id as before.
 - For notes, include category_name when the user explicitly names a category,
   for example "сохрани в закладку покупки", "добавь в категорию покупки",
   or "save to shopping".
 - If known_categories contains a confident match for a similar note, reuse the
   existing category name exactly as listed there.
+- For source_type "forwarded", still treat the message as a note and use these
+  same note category rules. Do not create a separate forwarded category system.
 - If a note should have a category but you are not sure which one, set
   parameters.missing_fields to ["category"] and ask for the category in
   clarification_question.
