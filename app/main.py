@@ -1,6 +1,6 @@
 import asyncio
 
-from app.bot import run_bot
+from app.bot.app import run_bot
 from app.common.logging import configure_logging
 from app.config.settings import get_settings
 

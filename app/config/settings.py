@@ -1,8 +1,8 @@
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -17,7 +17,9 @@ class Settings(BaseSettings):
     ai_model: str = ""
     openai_api_key: str = ""
     openrouter_api_key: str = ""
-    allowed_telegram_user_ids: list[int] = Field(default_factory=list)
+    allowed_telegram_user_ids: Annotated[list[int], NoDecode] = Field(
+        default_factory=list
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",

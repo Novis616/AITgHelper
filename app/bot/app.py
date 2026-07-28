@@ -11,6 +11,7 @@ from app.bot.middlewares.db_session import DbSessionMiddleware
 from app.bot.routers import common, messages
 from app.config.settings import Settings, get_settings
 from app.repositories.database import async_session_factory, engine
+from app.scheduler import ReminderScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +40,19 @@ async def run_bot(settings: Settings | None = None) -> None:
         token=settings.telegram_bot_token,
         default=DefaultBotProperties(parse_mode=None),
     )
+    reminder_scheduler = ReminderScheduler(
+        bot=bot,
+        session_factory=async_session_factory,
+    )
+    dispatcher["reminder_scheduler"] = reminder_scheduler
     logger.info("Starting Telegram bot polling")
     try:
+        await reminder_scheduler.start()
         await dispatcher.start_polling(
             bot,
             allowed_updates=dispatcher.resolve_used_update_types(),
         )
     finally:
+        await reminder_scheduler.shutdown()
         await bot.session.close()
         await engine.dispose()
