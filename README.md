@@ -1,53 +1,160 @@
 # AITgHelper
 
-AITgHelper is a personal Telegram assistant built with Python and aiogram.
+AITgHelper is a local-first Telegram assistant for saving notes, handling
+forwarded messages, and creating simple one-time reminders from natural text.
+It is built with Python 3.13, aiogram 3.x, SQLAlchemy, Alembic, SQLite, and a
+configurable OpenAI-compatible AI provider.
 
-The project is being prepared as a local-first bot for saving notes, handling
-forwarded Telegram messages, creating simple one-time reminders, and using a
-configurable AI provider for message interpretation.
+The project is intended for personal use first. Runtime data, logs, local
+configuration, and API keys stay on your machine.
 
-## Status
+## MVP Features
 
-The repository currently contains the project skeleton, async database layer,
-service layer, and a basic aiogram 3.x Telegram bot. The bot can respond to
-`/start` and `/help`, save regular text messages as notes, and save forwarded
-text messages as notes.
-
-Reminder scheduling and AI interpretation are intentionally not implemented yet.
+- Telegram bot with `/start` and `/help`.
+- Russian and English bot replies.
+- Saving regular text messages as notes.
+- Saving forwarded text messages as notes with available Telegram source
+  metadata.
+- Listing and deleting notes.
+- Creating simple one-time reminders from text such as `remind me tomorrow at
+  18:00 to buy groceries`.
+- Listing and deleting reminders.
+- Reminder delivery through an in-process APScheduler job.
+- Startup recovery for scheduled reminders stored in the database.
+- Basic user timezone handling, with dates stored in UTC.
+- AI message interpretation through either OpenAI or OpenRouter.
+- Local storage of AI request history for debugging.
+- SQLite database managed through SQLAlchemy 2.x and Alembic migrations.
+- Automated tests for services, repositories, bot handlers, AI parsing, and
+  scheduler behavior.
 
 ## Requirements
 
-- Python 3.13
-- A Telegram bot token for future bot runs
-- An OpenAI or OpenRouter API key for future AI features
+- Python `>=3.13,<3.14`
+- Git
+- A Telegram bot token from BotFather
+- An OpenAI API key or an OpenRouter API key
+- SQLite, included with Python for the default local setup
+
+Docker is not required for the current local setup.
 
 ## Configuration
 
-Copy `.env.example` to `.env` and fill in local values. Real tokens, API keys,
-local databases, logs, and private data must stay out of Git.
+Copy the example environment file and fill in local values:
 
-## Development
+```powershell
+Copy-Item .env.example .env
+```
 
-Install dependencies:
+On macOS or Linux:
+
+```bash
+cp .env.example .env
+```
+
+Example structure:
+
+```dotenv
+TELEGRAM_BOT_TOKEN=
+
+AI_PROVIDER=openai
+OPENAI_API_KEY=
+OPENROUTER_API_KEY=
+AI_MODEL=
+
+APP_ENV=local
+LOG_LEVEL=INFO
+DEFAULT_TIMEZONE=Europe/Moscow
+
+DATABASE_URL=sqlite+aiosqlite:///./data/aitghelper.sqlite3
+
+ALLOWED_TELEGRAM_USER_IDS=
+```
+
+Notes:
+
+- `TELEGRAM_BOT_TOKEN` is required to run the bot.
+- `AI_PROVIDER` must be `openai` or `openrouter`.
+- Set `OPENAI_API_KEY` when `AI_PROVIDER=openai`.
+- Set `OPENROUTER_API_KEY` when `AI_PROVIDER=openrouter`.
+- `AI_MODEL` must contain a model name supported by the selected provider.
+- `ALLOWED_TELEGRAM_USER_IDS` is optional. Leave it empty to allow any user who
+  can reach the bot, or set comma-separated numeric Telegram user IDs such as
+  `123456789,987654321`.
+- Do not put real secrets in `.env.example`, source code, tests, or commits.
+
+## Local Setup
+
+Create and activate a virtual environment:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+Install the project with development dependencies:
 
 ```powershell
 python -m pip install -e ".[dev]"
 ```
 
-Run the import test:
+Create the local database schema:
+
+```powershell
+python -m alembic upgrade head
+```
+
+Run the bot:
+
+```powershell
+python -m app
+```
+
+The same entry point is also available after installation:
+
+```powershell
+aitghelper
+```
+
+## Tests
+
+Run the full test suite:
 
 ```powershell
 python -m pytest
 ```
 
-Apply database migrations:
+Optional syntax/import check:
 
 ```powershell
-alembic upgrade head
+python -m compileall app tests migrations
 ```
 
-Run the Telegram bot:
+Check the current Alembic migration revision:
 
 ```powershell
-python -m app
+python -m alembic current
 ```
+
+If your local `.env` restricts access, make sure `ALLOWED_TELEGRAM_USER_IDS`
+contains only numeric IDs. Usernames such as `@username` are not valid there.
+
+## Docker
+
+Docker support is not included in the current repository state. There is no
+`Dockerfile` or `docker-compose.yml` yet, so use the local Python setup above.
+
+## Data And Secrets
+
+The default SQLite database is stored under `data/`. Local environment files,
+database files, logs, caches, and other runtime artifacts should not be
+committed.
+
+Before publishing changes, it is useful to check:
+
+```powershell
+git status --short
+git ls-files .env data logs *.sqlite *.sqlite3 *.db
+```
+
+The second command should not list local secrets or database files.
