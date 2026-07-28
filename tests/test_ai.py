@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai import OpenAiClient, OpenRouterClient, create_ai_client, parse_intent_response
 from app.ai.base import AiClient
+from app.ai.prompt_builder import build_user_prompt
 from app.config.settings import Settings
 from app.models import Base
 from app.repositories import AiRequestLogRepository
@@ -90,6 +91,19 @@ def test_create_ai_client_uses_configured_provider() -> None:
     assert openai_client.model == "gpt-test"
     assert isinstance(openrouter_client, OpenRouterClient)
     assert openrouter_client.model == "router-test"
+
+
+def test_build_user_prompt_includes_known_categories() -> None:
+    prompt = build_user_prompt(
+        AiInterpretationInput(
+            telegram_id=1,
+            text="Save OZON link",
+            language="en",
+            known_categories=["Shopping"],
+        )
+    )
+
+    assert '"known_categories": ["Shopping"]' in prompt
 
 
 def test_ai_interpretation_service_logs_success(tmp_path: Path) -> None:

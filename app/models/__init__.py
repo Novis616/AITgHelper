@@ -4,6 +4,7 @@ from app.models.ai_request_log import AiRequestLog
 from app.models.base import Base
 from app.models.dialog_state import DialogState
 from app.models.note import Note
+from app.models.note_category import NoteCategory
 from app.models.reminder import Reminder
 from app.models.user import User
 
@@ -12,6 +13,7 @@ __all__ = [
     "Base",
     "DialogState",
     "Note",
+    "NoteCategory",
     "Reminder",
     "User",
 ]

@@ -15,6 +15,7 @@ from app.schemas import (
     NoteRead,
     ReminderRead,
 )
+from app.schemas.dialog_state import DialogStateRead
 from app.services import IncomingMessageService
 from app.services.incoming_message_responses import reminder_created_text
 
@@ -39,10 +40,16 @@ class FakeNoteService:
         self.forwarded: list[CreateForwardedNoteInput] = []
         self.deleted: list[int] = []
         self.listed = [make_note(note_id=11, content="First note")]
+        self.category_names: list[str] = []
 
     async def create_note(self, data: CreateNoteInput) -> NoteRead:
         self.created.append(data)
-        return make_note(note_id=1, content=data.content, language=data.language)
+        return make_note(
+            note_id=1,
+            content=data.content,
+            language=data.language,
+            category_name=data.category_name,
+        )
 
     async def create_forwarded_text_note(
         self,
@@ -53,6 +60,9 @@ class FakeNoteService:
 
     async def list_notes(self, *, telegram_id: int, limit: int = 20) -> list[NoteRead]:
         return self.listed
+
+    async def list_category_names(self, *, telegram_id: int) -> list[str]:
+        return self.category_names
 
     async def delete_note(self, *, telegram_id: int, note_id: int) -> None:
         self.deleted.append(note_id)
@@ -96,9 +106,19 @@ class FailingReminderService(FakeReminderService):
 class FakeDialogService:
     def __init__(self) -> None:
         self.created: list[CreateDialogStateInput] = []
+        self.active: DialogStateRead | None = None
+        self.completed = False
 
     async def create_dialog_state(self, data: CreateDialogStateInput):
         self.created.append(data)
+        return None
+
+    async def get_active_dialog_state(self, *, telegram_id: int):
+        return self.active
+
+    async def complete_dialog_state(self, *, telegram_id: int):
+        self.completed = True
+        self.active = None
         return None
 
 
@@ -154,11 +174,15 @@ def make_note(
     content: str,
     source_type: str = "plain",
     language: str = "en",
+    category_id: int | None = None,
+    category_name: str | None = None,
 ) -> NoteRead:
     now = datetime.now(timezone.utc)
     return NoteRead(
         id=note_id,
         user_id=10,
+        category_id=category_id,
+        category_name=category_name,
         title=None,
         content=content,
         source_type=source_type,
@@ -255,6 +279,101 @@ def test_incoming_service_maps_create_note() -> None:
         assert result.text == "Done, saved note #1."
         assert ai.calls[0].text == "Save this"
         assert notes.created[0].content == "AI note"
+
+    run(scenario())
+
+
+def test_incoming_service_creates_note_with_explicit_category() -> None:
+    async def scenario() -> None:
+        service, _, notes, _, dialogs = make_service(
+            IntentResult(
+                intent="create_note",
+                parameters={"content": "https://ozon.ru/item", "category_name": "Shopping"},
+            )
+        )
+
+        result = await service.handle_text_message(make_message("Save to shopping"))
+
+        assert result.text == "Done, saved note #1."
+        assert notes.created[0].category_name == "Shopping"
+        assert dialogs.created == []
+
+    run(scenario())
+
+
+def test_incoming_service_passes_known_categories_to_ai() -> None:
+    async def scenario() -> None:
+        notes = FakeNoteService()
+        notes.category_names = ["Shopping"]
+        service, ai, created_notes, _, _ = make_service(
+            IntentResult(
+                intent="create_note",
+                parameters={
+                    "content": "https://ozon.ru/next",
+                    "category_name": "Shopping",
+                },
+            ),
+            note_service=notes,
+        )
+
+        await service.handle_text_message(make_message("Save this OZON link"))
+
+        assert ai.calls[0].known_categories == ["Shopping"]
+        assert created_notes.created[0].category_name == "Shopping"
+
+    run(scenario())
+
+
+def test_incoming_service_asks_for_category_when_ai_needs_it() -> None:
+    async def scenario() -> None:
+        service, _, notes, _, dialogs = make_service(
+            IntentResult(
+                intent="create_note",
+                parameters={"content": "https://example.com", "missing_fields": ["category"]},
+                clarification_question="Which category?",
+            )
+        )
+
+        result = await service.handle_text_message(make_message("Save this link"))
+
+        assert result.text == "Which category?"
+        assert notes.created == []
+        assert dialogs.created[0].state_type == "create_note_category"
+        assert dialogs.created[0].payload["missing_fields"] == ["category"]
+
+    run(scenario())
+
+
+def test_incoming_service_completes_category_dialog() -> None:
+    async def scenario() -> None:
+        dialogs = FakeDialogService()
+        now = datetime.now(timezone.utc)
+        dialogs.active = DialogStateRead(
+            id=1,
+            user_id=10,
+            state_type="create_note_category",
+            status="active",
+            payload={
+                "original_text": "https://ozon.ru/item save it",
+                "parameters": {"content": "https://ozon.ru/item"},
+                "missing_fields": ["category"],
+            },
+            expires_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        service, ai, notes, _, _ = make_service(
+            IntentResult(intent="unknown"),
+            dialog_service=dialogs,
+        )
+
+        result = await service.handle_text_message(make_message("Shopping"))
+
+        assert result.text == "Done, saved note #1."
+        assert ai.calls == []
+        assert notes.created[0].content == "https://ozon.ru/item"
+        assert notes.created[0].category_name == "Shopping"
+        assert dialogs.completed is True
 
     run(scenario())
 

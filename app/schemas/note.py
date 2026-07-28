@@ -7,6 +7,7 @@ class CreateNoteInput(BaseModel):
     telegram_id: int
     content: str
     title: str | None = None
+    category_name: str | None = None
     language: str = "ru"
 
 
@@ -24,6 +25,8 @@ class CreateForwardedNoteInput(CreateNoteInput):
 class NoteRead(BaseModel):
     id: int
     user_id: int
+    category_id: int | None = None
+    category_name: str | None = None
     title: str | None
     content: str
     source_type: str

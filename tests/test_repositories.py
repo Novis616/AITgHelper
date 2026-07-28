@@ -10,6 +10,7 @@ from app.models import Base
 from app.repositories import (
     AiRequestLogRepository,
     DialogStateRepository,
+    NoteCategoryRepository,
     NoteRepository,
     ReminderRepository,
     UserRepository,
@@ -88,6 +89,33 @@ def test_note_repository_create_list_and_delete(tmp_path: Path) -> None:
             await session.commit()
 
             assert await notes.get_by_id(note.id) is None
+        finally:
+            await close_session(session)
+
+    run(scenario())
+
+
+def test_note_category_repository_normalizes_names(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        session = await make_session(tmp_path)
+        try:
+            users = UserRepository(session)
+            categories = NoteCategoryRepository(session)
+            user = await users.create(telegram_id=2002)
+
+            first = await categories.get_or_create(
+                user_id=user.id,
+                name="  Shopping   Links ",
+            )
+            second = await categories.get_or_create(
+                user_id=user.id,
+                name="shopping links",
+            )
+            await session.commit()
+
+            assert first.id == second.id
+            assert first.name == "Shopping Links"
+            assert first.normalized_name == "shopping links"
         finally:
             await close_session(session)
 

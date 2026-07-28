@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.errors import NotFoundError, ValidationError
-from app.repositories import NoteRepository, UserRepository
+from app.repositories import NoteCategoryRepository, NoteRepository, UserRepository
 from app.schemas.note import CreateForwardedNoteInput, CreateNoteInput, NoteRead
 
 
@@ -10,6 +10,7 @@ class NoteService:
         self.session = session
         self.users = UserRepository(session)
         self.notes = NoteRepository(session)
+        self.categories = NoteCategoryRepository(session)
 
     async def create_note(self, data: CreateNoteInput) -> NoteRead:
         content = self._clean_required_text(data.content, "content")
@@ -18,10 +19,15 @@ class NoteService:
             telegram_id=data.telegram_id,
             language=data.language,
         )
+        category = await self._get_or_create_category(
+            user_id=user.id,
+            name=data.category_name,
+        )
         note = await self.notes.create(
             user_id=user.id,
             title=title,
             content=content,
+            category=category,
             source_type="plain",
             language=data.language,
         )
@@ -38,10 +44,15 @@ class NoteService:
             telegram_id=data.telegram_id,
             language=data.language,
         )
+        category = await self._get_or_create_category(
+            user_id=user.id,
+            name=data.category_name,
+        )
         note = await self.notes.create(
             user_id=user.id,
             title=title,
             content=content,
+            category=category,
             source_type="forwarded",
             source_chat_id=data.forward.source_chat_id,
             source_chat_title=data.forward.source_chat_title,
@@ -60,6 +71,13 @@ class NoteService:
             return []
         notes = await self.notes.list_for_user(user.id, limit=limit)
         return [NoteRead.model_validate(note) for note in notes]
+
+    async def list_category_names(self, *, telegram_id: int) -> list[str]:
+        user = await self.users.get_by_telegram_id(telegram_id)
+        if user is None:
+            return []
+        categories = await self.categories.list_for_user(user.id)
+        return [category.name for category in categories]
 
     async def delete_note(self, *, telegram_id: int, note_id: int) -> None:
         user = await self.users.get_by_telegram_id(telegram_id)
@@ -80,3 +98,14 @@ class NoteService:
             return None
         cleaned = value.strip()
         return cleaned or None
+
+    async def _get_or_create_category(
+        self,
+        *,
+        user_id: int,
+        name: str | None,
+    ):
+        cleaned = self._clean_optional_text(name)
+        if cleaned is None:
+            return None
+        return await self.categories.get_or_create(user_id=user_id, name=cleaned)

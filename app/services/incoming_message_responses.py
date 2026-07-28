@@ -31,12 +31,19 @@ def clarification_text(question: str | None, language: str) -> str:
     )
 
 
+def category_clarification_text(language: str) -> str:
+    if _is_en(language):
+        return "Which category should I save this note to?"
+    return "В какую категорию сохранить эту заметку?"
+
+
 def list_notes_text(notes: list[NoteRead], language: str) -> str:
     if not notes:
         return "No notes yet." if _is_en(language) else "Заметок пока нет."
     lines = ["Notes:" if _is_en(language) else "Заметки:"]
     for note in notes:
-        lines.append(f"#{note.id}: {_single_line_preview(note.content)}")
+        category = f" [{note.category_name}]" if note.category_name else ""
+        lines.append(f"#{note.id}{category}: {_single_line_preview(note.content)}")
     return "\n".join(lines)
 
 

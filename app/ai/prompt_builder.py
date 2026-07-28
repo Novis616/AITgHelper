@@ -27,6 +27,15 @@ Rules:
 - For reminders, include text and remind_at when available.
 - Resolve relative reminder times using current_datetime_utc and timezone.
 - For remind_at, always return ISO 8601 datetime, never phrases like "tomorrow" or "in 2 minutes".
+- For notes, include content when available.
+- For notes, include category_name when the user explicitly names a category,
+  for example "сохрани в закладку покупки", "добавь в категорию покупки",
+  or "save to shopping".
+- If known_categories contains a confident match for a similar note, reuse the
+  existing category name exactly as listed there.
+- If a note should have a category but you are not sure which one, set
+  parameters.missing_fields to ["category"] and ask for the category in
+  clarification_question.
 - Support Russian and English messages.
 """
 
@@ -41,6 +50,7 @@ def build_user_prompt(input_data: AiInterpretationInput) -> str:
         "current_datetime_utc": current_utc.isoformat(),
         "current_datetime_local": _local_datetime_iso(current_utc, input_data.timezone),
         "dialog_context": input_data.dialog_context,
+        "known_categories": input_data.known_categories,
         "allowed_intents": SUPPORTED_INTENTS,
     }
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)

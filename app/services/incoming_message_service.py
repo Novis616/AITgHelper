@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.time import utc_now
 from app.services.incoming_message_responses import (
+    category_clarification_text,
     clarification_text,
     deleted_text,
     list_notes_text,
@@ -30,6 +31,7 @@ from app.schemas import (
     IncomingMessageResult,
     IncomingTextMessage,
     IntentResult,
+    NoteRead,
 )
 from app.services.ai_interpretation_service import AiInterpretationService
 from app.services.dialog_service import DialogService
@@ -79,6 +81,20 @@ class IncomingMessageService:
         if not text:
             raise ValidationError("text must not be empty")
 
+        active_dialog = await self.dialog_service.get_active_dialog_state(
+            telegram_id=message.telegram_id,
+        )
+        if (
+            active_dialog is not None
+            and active_dialog.state_type == "create_note_category"
+        ):
+            note = await self._complete_note_category_dialog(message, active_dialog)
+            return IncomingMessageResult(
+                text=note_saved_text(note, message.language, forwarded=False),
+                intent="create_note",
+                parameters={"category_name": note.category_name},
+            )
+
         if message.is_forwarded:
             note = await self.note_service.create_forwarded_text_note(
                 CreateForwardedNoteInput(
@@ -93,6 +109,7 @@ class IncomingMessageService:
                 intent="create_note",
             )
 
+        known_categories = await self._known_categories(message.telegram_id)
         intent = await self.ai_service.interpret_message(
             AiInterpretationInput(
                 telegram_id=message.telegram_id,
@@ -100,6 +117,7 @@ class IncomingMessageService:
                 language=message.language,
                 source_type=message.source_type,
                 timezone=message.timezone or self.settings.default_timezone,
+                known_categories=known_categories,
             )
         )
         answer = await self._apply_intent(message, intent)
@@ -118,11 +136,28 @@ class IncomingMessageService:
 
         if intent.intent == "create_note":
             content = self._optional_text(parameters, "content", "text", "note")
+            category_name = self._optional_text(parameters, "category_name", "category")
+            missing_fields = self._missing_fields(parameters)
+            if "category" in missing_fields or (
+                self._optional_bool(parameters, "category_required")
+                and category_name is None
+            ):
+                return await self._ask_for_missing_data(
+                    message,
+                    intent,
+                    ["category"],
+                    question=(
+                        intent.clarification_question
+                        or category_clarification_text(message.language)
+                    ),
+                    state_type="create_note_category",
+                )
             note = await self.note_service.create_note(
                 CreateNoteInput(
                     telegram_id=message.telegram_id,
                     content=content or message.text,
                     title=self._optional_text(parameters, "title"),
+                    category_name=category_name,
                     language=message.language,
                 )
             )
@@ -223,11 +258,12 @@ class IncomingMessageService:
         missing_fields: list[str],
         *,
         question: str | None = None,
+        state_type: str | None = None,
     ) -> str:
         await self.dialog_service.create_dialog_state(
             CreateDialogStateInput(
                 telegram_id=message.telegram_id,
-                state_type=intent.intent,
+                state_type=state_type or intent.intent,
                 payload={
                     "original_text": message.text,
                     "intent": intent.intent,
@@ -242,6 +278,36 @@ class IncomingMessageService:
             question or intent.clarification_question,
             message.language,
         )
+
+    async def _complete_note_category_dialog(
+        self,
+        message: IncomingTextMessage,
+        active_dialog,
+    ) -> NoteRead:
+        payload = dict(active_dialog.payload)
+        parameters = payload.get("parameters")
+        if not isinstance(parameters, dict):
+            parameters = {}
+        content = self._optional_text(parameters, "content", "text", "note")
+        note = await self.note_service.create_note(
+            CreateNoteInput(
+                telegram_id=message.telegram_id,
+                content=content or str(payload.get("original_text") or "").strip(),
+                title=self._optional_text(parameters, "title"),
+                category_name=message.text,
+                language=message.language,
+            )
+        )
+        await self.dialog_service.complete_dialog_state(
+            telegram_id=message.telegram_id,
+        )
+        return note
+
+    async def _known_categories(self, telegram_id: int) -> list[str]:
+        list_category_names = getattr(self.note_service, "list_category_names", None)
+        if list_category_names is None:
+            return []
+        return await list_category_names(telegram_id=telegram_id)
 
     def _optional_text(self, parameters: dict[str, Any], *keys: str) -> str | None:
         for key in keys:
@@ -263,6 +329,21 @@ class IncomingMessageService:
             except ValueError:
                 continue
         return None
+
+    def _optional_bool(self, parameters: dict[str, Any], *keys: str) -> bool:
+        for key in keys:
+            value = parameters.get(key)
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                return value.strip().casefold() in {"1", "true", "yes", "да"}
+        return False
+
+    def _missing_fields(self, parameters: dict[str, Any]) -> list[str]:
+        value = parameters.get("missing_fields")
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()]
 
     def _optional_datetime(
         self,

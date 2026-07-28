@@ -74,6 +74,63 @@ def test_note_service_creates_lists_and_deletes_plain_note(tmp_path: Path) -> No
     run(scenario())
 
 
+def test_note_service_lists_notes_oldest_first(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        session = await make_session(tmp_path)
+        try:
+            service = NoteService(session)
+
+            first = await service.create_note(
+                CreateNoteInput(telegram_id=1011, content="First")
+            )
+            second = await service.create_note(
+                CreateNoteInput(telegram_id=1011, content="Second")
+            )
+
+            listed = await service.list_notes(telegram_id=1011)
+
+            assert [item.id for item in listed] == [first.id, second.id]
+            assert [item.content for item in listed] == ["First", "Second"]
+        finally:
+            await close_session(session)
+
+    run(scenario())
+
+
+def test_note_service_creates_and_reuses_category(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        session = await make_session(tmp_path)
+        try:
+            service = NoteService(session)
+
+            first = await service.create_note(
+                CreateNoteInput(
+                    telegram_id=1012,
+                    content="https://ozon.ru/first",
+                    category_name="  Shopping  ",
+                    language="en",
+                )
+            )
+            second = await service.create_note(
+                CreateNoteInput(
+                    telegram_id=1012,
+                    content="https://ozon.ru/second",
+                    category_name="shopping",
+                    language="en",
+                )
+            )
+
+            assert first.category_id is not None
+            assert second.category_id == first.category_id
+            assert first.category_name == "Shopping"
+            assert second.category_name == "Shopping"
+            assert await service.list_category_names(telegram_id=1012) == ["Shopping"]
+        finally:
+            await close_session(session)
+
+    run(scenario())
+
+
 def test_note_service_creates_forwarded_text_note(tmp_path: Path) -> None:
     async def scenario() -> None:
         session = await make_session(tmp_path)
@@ -84,6 +141,7 @@ def test_note_service_creates_forwarded_text_note(tmp_path: Path) -> None:
                 CreateForwardedNoteInput(
                     telegram_id=1002,
                     content="Forwarded insight",
+                    category_name="Inbox",
                     forward=ForwardInfo(
                         source_chat_id=55,
                         source_chat_title="Source chat",
@@ -94,6 +152,7 @@ def test_note_service_creates_forwarded_text_note(tmp_path: Path) -> None:
             )
 
             assert note.source_type == "forwarded"
+            assert note.category_name == "Inbox"
             assert note.source_chat_id == 55
             assert note.source_chat_title == "Source chat"
             assert note.source_message_id == 77

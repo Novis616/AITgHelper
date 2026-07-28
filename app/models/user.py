@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from app.models.ai_request_log import AiRequestLog
     from app.models.dialog_state import DialogState
     from app.models.note import Note
+    from app.models.note_category import NoteCategory
     from app.models.reminder import Reminder
 
 
@@ -25,6 +26,10 @@ class User(TimestampMixin, Base):
     )
 
     notes: Mapped[list["Note"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    note_categories: Mapped[list["NoteCategory"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
     )

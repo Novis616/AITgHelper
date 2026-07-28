@@ -33,6 +33,7 @@ class AiInterpretationInput(BaseModel):
     source_type: str = "plain"
     timezone: str | None = None
     dialog_context: dict[str, Any] | None = None
+    known_categories: list[str] = Field(default_factory=list)
 
 
 class IntentResult(BaseModel):
