@@ -8,9 +8,12 @@ configurable AI provider for message interpretation.
 
 ## Status
 
-The repository currently contains a minimal Python project skeleton. Telegram
-handlers, database models, reminder scheduling, and AI logic are intentionally
-not implemented yet.
+The repository currently contains the project skeleton, async database layer,
+service layer, and a basic aiogram 3.x Telegram bot. The bot can respond to
+`/start` and `/help`, save regular text messages as notes, and save forwarded
+text messages as notes.
+
+Reminder scheduling and AI interpretation are intentionally not implemented yet.
 
 ## Requirements
 
@@ -37,7 +40,13 @@ Run the import test:
 python -m pytest
 ```
 
-Run the current skeleton entrypoint:
+Apply database migrations:
+
+```powershell
+alembic upgrade head
+```
+
+Run the Telegram bot:
 
 ```powershell
 python -m app

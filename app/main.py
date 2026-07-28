@@ -1,16 +1,15 @@
+import asyncio
+
+from app.bot import run_bot
 from app.common.logging import configure_logging
 from app.config.settings import get_settings
 
 
 def main() -> None:
-    """Minimal application entrypoint.
-
-    Full Telegram bot startup, storage, scheduler, and AI logic are added in
-    later project stages.
-    """
+    """Application entrypoint for running the Telegram bot."""
     settings = get_settings()
     configure_logging(settings.log_level)
-    print(f"AITgHelper skeleton is ready for app_env={settings.app_env}")
+    asyncio.run(run_bot(settings))
 
 
 if __name__ == "__main__":
