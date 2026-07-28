@@ -16,6 +16,7 @@ from app.schemas import (
     ReminderRead,
 )
 from app.services import IncomingMessageService
+from app.services.incoming_message_responses import reminder_created_text
 
 
 def run(coro):
@@ -176,18 +177,70 @@ def make_reminder(
     reminder_id: int,
     text: str,
     remind_at: datetime | None = None,
+    timezone_name: str = "UTC",
 ) -> ReminderRead:
     return ReminderRead(
         id=reminder_id,
         user_id=10,
         text=text,
         remind_at_utc=remind_at or datetime.now(timezone.utc) + timedelta(hours=1),
-        timezone="UTC",
+        timezone=timezone_name,
         status="scheduled",
         created_at=datetime.now(timezone.utc),
         sent_at=None,
         error_text=None,
     )
+
+
+def test_reminder_created_text_for_today() -> None:
+    reminder = make_reminder(
+        reminder_id=1,
+        text="закрыть дверь",
+        remind_at=datetime(2026, 7, 28, 15, 35, tzinfo=timezone.utc),
+        timezone_name="Europe/Moscow",
+    )
+
+    text = reminder_created_text(
+        reminder,
+        "ru",
+        now=datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert text == "Готово, создал напоминание на 18:35."
+
+
+def test_reminder_created_text_for_other_day_in_current_year() -> None:
+    reminder = make_reminder(
+        reminder_id=1,
+        text="закрыть дверь",
+        remind_at=datetime(2026, 7, 30, 15, 35, tzinfo=timezone.utc),
+        timezone_name="Europe/Moscow",
+    )
+
+    text = reminder_created_text(
+        reminder,
+        "ru",
+        now=datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert text == "Готово, создал напоминание на 30.07 в 18:35."
+
+
+def test_reminder_created_text_for_other_year() -> None:
+    reminder = make_reminder(
+        reminder_id=1,
+        text="закрыть дверь",
+        remind_at=datetime(2027, 7, 30, 15, 35, tzinfo=timezone.utc),
+        timezone_name="Europe/Moscow",
+    )
+
+    text = reminder_created_text(
+        reminder,
+        "ru",
+        now=datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc),
+    )
+
+    assert text == "Готово, создал напоминание на 30.07.2027 в 18:35."
 
 
 def test_incoming_service_maps_create_note() -> None:
@@ -259,7 +312,7 @@ def test_incoming_service_maps_create_reminder_with_iso_datetime() -> None:
         result = await service.handle_text_message(make_message("Remind me"))
 
         assert result.intent == "create_reminder"
-        assert result.text.startswith("Done, created reminder #3:")
+        assert result.text.startswith("Done, created reminder")
         assert reminders.created[0].text == "Buy milk"
         assert reminders.created[0].remind_at == datetime(
             2026,
@@ -269,6 +322,60 @@ def test_incoming_service_maps_create_reminder_with_iso_datetime() -> None:
             0,
             tzinfo=timezone.utc,
         )
+        assert scheduler.scheduled == [(3, reminders.created[0].remind_at)]
+        assert dialogs.created == []
+
+    run(scenario())
+
+
+def test_incoming_service_maps_create_reminder_with_relative_datetime() -> None:
+    async def scenario() -> None:
+        scheduler = FakeReminderScheduler()
+        service, _, _, reminders, dialogs = make_service(
+            IntentResult(
+                intent="create_reminder",
+                parameters={
+                    "text": "Call mom",
+                    "remind_at": "in 2 minutes",
+                },
+            ),
+            reminder_scheduler=scheduler,
+        )
+
+        result = await service.handle_text_message(make_message("Remind me"))
+
+        assert result.intent == "create_reminder"
+        assert result.text.startswith("Done, created reminder")
+        assert reminders.created[0].text == "Call mom"
+        delta = reminders.created[0].remind_at - datetime.now(timezone.utc)
+        assert 0 < delta.total_seconds() <= 130
+        assert scheduler.scheduled == [(3, reminders.created[0].remind_at)]
+        assert dialogs.created == []
+
+    run(scenario())
+
+
+def test_incoming_service_maps_create_reminder_with_russian_relative_datetime() -> None:
+    async def scenario() -> None:
+        scheduler = FakeReminderScheduler()
+        service, _, _, reminders, dialogs = make_service(
+            IntentResult(
+                intent="create_reminder",
+                parameters={
+                    "text": "позвонить маме",
+                    "remind_at": "через 2 минуты",
+                },
+            ),
+            reminder_scheduler=scheduler,
+        )
+
+        result = await service.handle_text_message(make_message("напомни мне"))
+
+        assert result.intent == "create_reminder"
+        assert result.text.startswith("Done, created reminder")
+        assert reminders.created[0].text == "позвонить маме"
+        delta = reminders.created[0].remind_at - datetime.now(timezone.utc)
+        assert 0 < delta.total_seconds() <= 130
         assert scheduler.scheduled == [(3, reminders.created[0].remind_at)]
         assert dialogs.created == []
 

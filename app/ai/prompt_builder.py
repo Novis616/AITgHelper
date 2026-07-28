@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.schemas.intent_result import AiInterpretationInput, SUPPORTED_INTENTS
 
@@ -23,17 +25,31 @@ Rules:
 - parameters must be an object.
 - clarification_question must be null unless required data is missing.
 - For reminders, include text and remind_at when available.
+- Resolve relative reminder times using current_datetime_utc and timezone.
+- For remind_at, always return ISO 8601 datetime, never phrases like "tomorrow" or "in 2 minutes".
 - Support Russian and English messages.
 """
 
 
 def build_user_prompt(input_data: AiInterpretationInput) -> str:
+    current_utc = datetime.now(timezone.utc)
     payload = {
         "message": input_data.text,
         "language_hint": input_data.language,
         "source_type": input_data.source_type,
         "timezone": input_data.timezone,
+        "current_datetime_utc": current_utc.isoformat(),
+        "current_datetime_local": _local_datetime_iso(current_utc, input_data.timezone),
         "dialog_context": input_data.dialog_context,
         "allowed_intents": SUPPORTED_INTENTS,
     }
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _local_datetime_iso(current_utc: datetime, timezone_name: str | None) -> str:
+    if not timezone_name:
+        return current_utc.isoformat()
+    try:
+        return current_utc.astimezone(ZoneInfo(timezone_name)).isoformat()
+    except ZoneInfoNotFoundError:
+        return current_utc.isoformat()

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Base
 from app.repositories import ReminderRepository, UserRepository
 from app.repositories.database import create_engine, create_session_factory
+from app.scheduler.jobs import reminder_message_text
 from app.scheduler import ReminderScheduler, send_reminder_job
 
 
@@ -102,7 +103,7 @@ def test_send_reminder_job_marks_sent_after_success(tmp_path: Path) -> None:
             assert bot.messages == [
                 (
                     7001,
-                    "Reminder (this was scheduled earlier):\nBuy milk",
+                    "Напоминаю (это напоминание было запланировано раньше):\nBuy milk",
                 )
             ]
             status, error_text = await get_reminder_status(
@@ -115,6 +116,10 @@ def test_send_reminder_job_marks_sent_after_success(tmp_path: Path) -> None:
             await engine.dispose()
 
     run(scenario())
+
+
+def test_reminder_message_text_uses_russian_prefix() -> None:
+    assert reminder_message_text(text="закрыть дверь") == "Напоминаю:\nзакрыть дверь"
 
 
 def test_send_reminder_job_marks_failed_after_send_error(tmp_path: Path) -> None:
@@ -181,7 +186,7 @@ def test_reminder_scheduler_loads_overdue_and_future_reminders(tmp_path: Path) -
             assert bot.messages == [
                 (
                     7002,
-                    "Reminder (this was scheduled earlier):\nOverdue",
+                    "Напоминаю (это напоминание было запланировано раньше):\nOverdue",
                 )
             ]
             assert len(scheduler.jobs) == 1

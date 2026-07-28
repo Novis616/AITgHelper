@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from typing import Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.common.time import utc_now
 from app.services.incoming_message_responses import (
     clarification_text,
     deleted_text,
@@ -279,5 +281,52 @@ class IncomingMessageService:
             try:
                 return datetime.fromisoformat(text.replace("Z", "+00:00"))
             except ValueError:
-                continue
+                relative = self._relative_datetime(text)
+                if relative is not None:
+                    return relative
         return None
+
+    def _relative_datetime(self, value: str) -> datetime | None:
+        text = value.strip().lower()
+        match = re.fullmatch(
+            r"(?:in|\u0447\u0435\u0440\u0435\u0437)\s+(\d+)\s+"
+            r"(minute|minutes|min|"
+            r"\u043c\u0438\u043d\u0443\u0442\u0430|"
+            r"\u043c\u0438\u043d\u0443\u0442\u0443|"
+            r"\u043c\u0438\u043d\u0443\u0442\u044b|"
+            r"\u043c\u0438\u043d\u0443\u0442|"
+            r"hour|hours|"
+            r"\u0447\u0430\u0441|"
+            r"\u0447\u0430\u0441\u0430|"
+            r"\u0447\u0430\u0441\u043e\u0432|"
+            r"day|days|"
+            r"\u0434\u0435\u043d\u044c|"
+            r"\u0434\u043d\u044f|"
+            r"\u0434\u043d\u0435\u0439)",
+            text,
+        )
+        if match is None:
+            return None
+
+        amount = int(match.group(1))
+        unit = match.group(2)
+        seconds_by_unit = {
+            "minute": 60,
+            "minutes": 60,
+            "min": 60,
+            "\u043c\u0438\u043d\u0443\u0442\u0430": 60,
+            "\u043c\u0438\u043d\u0443\u0442\u0443": 60,
+            "\u043c\u0438\u043d\u0443\u0442\u044b": 60,
+            "\u043c\u0438\u043d\u0443\u0442": 60,
+            "hour": 3600,
+            "hours": 3600,
+            "\u0447\u0430\u0441": 3600,
+            "\u0447\u0430\u0441\u0430": 3600,
+            "\u0447\u0430\u0441\u043e\u0432": 3600,
+            "day": 86400,
+            "days": 86400,
+            "\u0434\u0435\u043d\u044c": 86400,
+            "\u0434\u043d\u044f": 86400,
+            "\u0434\u043d\u0435\u0439": 86400,
+        }
+        return utc_now() + timedelta(seconds=amount * seconds_by_unit[unit])

@@ -141,13 +141,13 @@ def test_reminder_service_converts_user_time_to_utc(tmp_path: Path) -> None:
                 CreateReminderInput(
                     telegram_id=2001,
                     text="Buy groceries",
-                    remind_at=datetime(2026, 7, 28, 18, 0),
+                    remind_at=datetime(2027, 7, 28, 18, 0),
                 )
             )
 
             assert reminder.timezone == "Europe/Moscow"
             assert reminder.remind_at_utc == datetime(
-                2026,
+                2027,
                 7,
                 28,
                 15,

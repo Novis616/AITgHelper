@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from app.common.time import utc_now
 from app.schemas import NoteRead, ReminderRead
 
 
@@ -50,7 +54,7 @@ def list_reminders_text(reminders: list[ReminderRead], language: str) -> str:
     return "\n".join(lines)
 
 
-def reminder_created_text(reminder: ReminderRead, language: str) -> str:
+def _legacy_reminder_created_text(reminder: ReminderRead, language: str) -> str:
     when = reminder.remind_at_utc.astimezone().strftime("%Y-%m-%d %H:%M")
     if _is_en(language):
         return f"Done, created reminder #{reminder.id}: {when}."
@@ -98,3 +102,61 @@ def _single_line_preview(value: str, *, max_length: int = 80) -> str:
 
 def _is_en(language: str) -> bool:
     return language.lower().split("-", maxsplit=1)[0] == "en"
+
+
+class _ReminderTimeModule:
+    def __init__(self, *, ru: str, en: str) -> None:
+        self.ru = ru
+        self.en = en
+
+
+def reminder_created_text(
+    reminder: ReminderRead,
+    language: str,
+    *,
+    now: datetime | None = None,
+) -> str:
+    when = _reminder_time_module(reminder, now=now)
+    if _is_en(language):
+        return f"Done, created reminder {when.en}."
+    return f"Готово, создал напоминание {when.ru}."
+
+
+def _reminder_time_module(
+    reminder: ReminderRead,
+    *,
+    now: datetime | None = None,
+) -> _ReminderTimeModule:
+    timezone_info = _safe_zoneinfo(reminder.timezone)
+    remind_at = _ensure_aware_utc(reminder.remind_at_utc).astimezone(timezone_info)
+    current = _ensure_aware_utc(now or utc_now()).astimezone(timezone_info)
+
+    time_part = remind_at.strftime("%H:%M")
+    if remind_at.date() == current.date():
+        return _ReminderTimeModule(ru=f"на {time_part}", en=f"at {time_part}")
+
+    if remind_at.year == current.year:
+        date_part = remind_at.strftime("%d.%m")
+        return _ReminderTimeModule(
+            ru=f"на {date_part} в {time_part}",
+            en=f"on {date_part} at {time_part}",
+        )
+
+    date_part = remind_at.strftime("%d.%m.%Y")
+    return _ReminderTimeModule(
+        ru=f"на {date_part} в {time_part}",
+        en=f"on {date_part} at {time_part}",
+    )
+
+
+def _safe_zoneinfo(timezone_name: str) -> ZoneInfo | timezone:
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        return timezone.utc
+
+
+def _ensure_aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)

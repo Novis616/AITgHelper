@@ -20,9 +20,9 @@ def ensure_aware_utc(value: datetime) -> datetime:
 
 
 def reminder_message_text(*, text: str, overdue: bool = False) -> str:
-    prefix = "Reminder"
+    prefix = "Напоминаю"
     if overdue:
-        prefix += " (this was scheduled earlier)"
+        prefix += " (это напоминание было запланировано раньше)"
     return f"{prefix}:\n{text}"
 
 
