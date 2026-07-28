@@ -35,8 +35,7 @@ configuration, and API keys stay on your machine.
 - A Telegram bot token from BotFather
 - An OpenAI API key or an OpenRouter API key
 - SQLite, included with Python for the default local setup
-
-Docker is not required for the current local setup.
+- Docker Desktop, if you want to run the bot in a container
 
 ## Configuration
 
@@ -141,8 +140,33 @@ contains only numeric IDs. Usernames such as `@username` are not valid there.
 
 ## Docker
 
-Docker support is not included in the current repository state. There is no
-`Dockerfile` or `docker-compose.yml` yet, so use the local Python setup above.
+The Docker setup uses the same local `.env` file and stores SQLite data under
+`data/` on your machine. Alembic migrations run automatically before the bot
+starts.
+
+Build and start the bot:
+
+```powershell
+docker compose up --build -d
+```
+
+View logs:
+
+```powershell
+docker compose logs -f bot
+```
+
+Stop the bot:
+
+```powershell
+docker compose down
+```
+
+Run migrations without starting polling:
+
+```powershell
+docker compose run --rm bot python -m alembic upgrade head
+```
 
 ## Data And Secrets
 

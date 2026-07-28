@@ -1,0 +1,14 @@
+services:
+  bot:
+    build:
+      context: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:///./data/aitghelper.sqlite3
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    command: >
+      sh -c "python -m alembic upgrade head && python -m app"
+    restart: unless-stopped
