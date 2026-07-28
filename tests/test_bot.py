@@ -104,6 +104,22 @@ def test_normalize_language_supports_ru_and_en_with_ru_fallback() -> None:
     assert message_text("unknown_command", "en") == "For now I only know /start and /help."
 
 
+def test_start_message_describes_main_features() -> None:
+    ru_start = message_text("start", "ru")
+    en_start = message_text("start", "en")
+
+    assert "заметки" in ru_start
+    assert "категориям" in ru_start
+    assert "напоминания" in ru_start
+    assert "удали заметки 1, 3, 7" in ru_start
+    assert "удали все напоминания" in ru_start
+    assert "notes" in en_start
+    assert "categories" in en_start
+    assert "reminders" in en_start
+    assert "delete notes 1, 3, 7" in en_start
+    assert "delete all reminders" in en_start
+
+
 def test_extract_forward_info_from_modern_channel_origin() -> None:
     message = make_message(
         forward_origin=SimpleNamespace(
