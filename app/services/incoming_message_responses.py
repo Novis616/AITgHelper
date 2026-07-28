@@ -118,10 +118,28 @@ def deleted_all_notes_text(count: int, language: str) -> str:
     return f"Удалил все заметки: {count}."
 
 
+def cancelled_reminders_by_ids_text(count: int, language: str) -> str:
+    if _is_en(language):
+        return f"Cancelled {count} reminder(s)."
+    return f"Отменил напоминаний: {count}."
+
+
+def cancelled_all_reminders_text(count: int, language: str) -> str:
+    if _is_en(language):
+        return f"Cancelled all active reminders: {count}."
+    return f"Отменил все активные напоминания: {count}."
+
+
 def notes_not_found_text(language: str) -> str:
     if _is_en(language):
         return "I could not find those notes."
     return "Не нашел такие заметки."
+
+
+def reminders_not_found_text(language: str) -> str:
+    if _is_en(language):
+        return "I could not find those active reminders."
+    return "Не нашел такие активные напоминания."
 
 
 def category_notes_not_found_text(category_name: str, language: str) -> str:

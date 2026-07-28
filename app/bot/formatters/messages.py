@@ -5,6 +5,7 @@ SUPPORTED_LANGUAGES = {"ru", "en"}
 
 MESSAGES: dict[str, dict[str, str]] = {
     "ru": {
+        "thinking": "Thinking...",
         "start": (
             "Привет! Я AITgHelper. Пришли мне текст или перешли сообщение, "
             "и я сохраню его как заметку."
@@ -41,6 +42,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "not_allowed": "This Telegram account does not have access to the bot yet.",
         "unknown_command": "For now I only know /start and /help.",
         "service_error": "Could not save the note. Please try again.",
+        "thinking": "Thinking...",
     },
 }
 

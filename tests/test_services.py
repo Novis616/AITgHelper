@@ -407,6 +407,127 @@ def test_reminder_service_rejects_past_time_and_cancels_only_owner(
     run(scenario())
 
 
+def test_reminder_service_bulk_cancels_ids_only_for_current_user(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        session = await make_session(tmp_path)
+        try:
+            service = ReminderService(
+                session,
+                settings=Settings(default_timezone="UTC"),
+            )
+
+            first = await service.create_reminder(
+                CreateReminderInput(
+                    telegram_id=2101,
+                    text="First",
+                    remind_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                )
+            )
+            second = await service.create_reminder(
+                CreateReminderInput(
+                    telegram_id=2101,
+                    text="Second",
+                    remind_at=datetime.now(timezone.utc) + timedelta(hours=2),
+                )
+            )
+            foreign = await service.create_reminder(
+                CreateReminderInput(
+                    telegram_id=9999,
+                    text="Foreign",
+                    remind_at=datetime.now(timezone.utc) + timedelta(hours=3),
+                )
+            )
+
+            with pytest.raises(NotFoundError):
+                await service.cancel_reminders_by_ids(
+                    telegram_id=2101,
+                    reminder_ids=[first.id, foreign.id],
+                )
+
+            assert await service.count_existing_scheduled_reminders_by_ids(
+                telegram_id=2101,
+                reminder_ids=[first.id, foreign.id],
+            ) == 0
+            assert await service.count_existing_scheduled_reminders_by_ids(
+                telegram_id=2101,
+                reminder_ids=[first.id, second.id],
+            ) == 2
+
+            cancelled_count = await service.cancel_reminders_by_ids(
+                telegram_id=2101,
+                reminder_ids=[first.id, second.id],
+            )
+
+            assert cancelled_count == 2
+            assert await service.list_reminders(
+                telegram_id=2101,
+                status="scheduled",
+            ) == []
+            foreign_reminders = await service.list_reminders(
+                telegram_id=9999,
+                status="scheduled",
+            )
+            assert [item.id for item in foreign_reminders] == [foreign.id]
+        finally:
+            await close_session(session)
+
+    run(scenario())
+
+
+def test_reminder_service_cancels_all_scheduled_only_for_current_user(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        session = await make_session(tmp_path)
+        try:
+            service = ReminderService(
+                session,
+                settings=Settings(default_timezone="UTC"),
+            )
+
+            await service.create_reminder(
+                CreateReminderInput(
+                    telegram_id=2102,
+                    text="One",
+                    remind_at=datetime.now(timezone.utc) + timedelta(hours=1),
+                )
+            )
+            await service.create_reminder(
+                CreateReminderInput(
+                    telegram_id=2102,
+                    text="Two",
+                    remind_at=datetime.now(timezone.utc) + timedelta(hours=2),
+                )
+            )
+            foreign = await service.create_reminder(
+                CreateReminderInput(
+                    telegram_id=9999,
+                    text="Foreign",
+                    remind_at=datetime.now(timezone.utc) + timedelta(hours=3),
+                )
+            )
+
+            assert await service.count_scheduled_reminders(telegram_id=2102) == 2
+
+            cancelled_count = await service.cancel_all_scheduled_reminders(
+                telegram_id=2102,
+            )
+
+            assert cancelled_count == 2
+            assert await service.count_scheduled_reminders(telegram_id=2102) == 0
+            foreign_reminders = await service.list_reminders(
+                telegram_id=9999,
+                status="scheduled",
+            )
+            assert [item.id for item in foreign_reminders] == [foreign.id]
+        finally:
+            await close_session(session)
+
+    run(scenario())
+
+
 def test_dialog_service_active_state_lifecycle(tmp_path: Path) -> None:
     async def scenario() -> None:
         session = await make_session(tmp_path)

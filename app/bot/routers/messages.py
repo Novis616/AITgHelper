@@ -38,6 +38,7 @@ async def handle_text_message(
         reminder_scheduler=reminder_scheduler,
     )
     language = get_message_language(message)
+    thinking_message = await message.answer(message_text("thinking", language))
     try:
         answer = await process_text_message(message, service)
     except ValidationError:
@@ -49,7 +50,23 @@ async def handle_text_message(
         )
         answer = message_text("service_error", language)
 
-    await message.answer(answer)
+    try:
+        await message.answer(answer)
+    finally:
+        await delete_temporary_message(thinking_message)
+
+
+async def delete_temporary_message(message: Message | None) -> None:
+    if message is None:
+        return
+    try:
+        await message.delete()
+    except Exception:
+        logger.warning(
+            "Could not delete temporary Telegram message: message_id=%s",
+            getattr(message, "message_id", None),
+            exc_info=True,
+        )
 
 
 async def process_text_message(message: Message, service: IncomingMessageService) -> str:

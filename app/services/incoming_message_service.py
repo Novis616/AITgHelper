@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.time import utc_now
 from app.services.incoming_message_responses import (
+    cancelled_all_reminders_text,
+    cancelled_reminders_by_ids_text,
     category_clarification_text,
     category_notes_not_found_text,
     clarification_text,
@@ -26,6 +28,7 @@ from app.services.incoming_message_responses import (
     reminder_cannot_cancel_text,
     reminder_created_text,
     reminder_time_invalid_text,
+    reminders_not_found_text,
 )
 from app.common.errors import NotFoundError, ValidationError
 from app.config.settings import Settings, get_settings
@@ -107,6 +110,19 @@ class IncomingMessageService:
             )
         if (
             active_dialog is not None
+            and active_dialog.state_type == "confirm_delete_reminders"
+        ):
+            answer = await self._complete_delete_reminders_confirmation_dialog(
+                message,
+                active_dialog,
+            )
+            return IncomingMessageResult(
+                text=answer,
+                intent="delete_reminder",
+                parameters=dict(active_dialog.payload),
+            )
+        if (
+            active_dialog is not None
             and active_dialog.state_type == "create_note_category"
         ):
             note = await self._complete_note_category_dialog(message, active_dialog)
@@ -163,6 +179,14 @@ class IncomingMessageService:
             intent = IntentResult(intent="unknown")
 
         parameters = intent.parameters
+        if intent.intent == "create_reminder":
+            answer = await self._apply_intent(message, intent)
+            return IncomingMessageResult(
+                text=answer,
+                intent=intent.intent,
+                parameters=dict(parameters),
+            )
+
         category_name = self._optional_text(parameters, "category_name", "category")
         missing_fields = self._missing_fields(parameters)
         if "category" in missing_fields or (
@@ -363,6 +387,39 @@ class IncomingMessageService:
             return list_reminders_text(reminders, message.language)
 
         if intent.intent == "delete_reminder":
+            delete_scope = self._optional_text(parameters, "delete_scope")
+            reminder_ids = self._optional_int_list(
+                parameters,
+                "reminder_ids",
+                "ids",
+            )
+            delete_all = self._optional_bool(parameters, "delete_all")
+
+            if delete_scope == "all" or delete_all:
+                return await self._create_delete_reminders_confirmation(
+                    message,
+                    operation_type="delete_all_reminders",
+                    count=await self.reminder_service.count_scheduled_reminders(
+                        telegram_id=message.telegram_id,
+                    ),
+                    payload={"delete_all": True},
+                    not_found_message=reminders_not_found_text(message.language),
+                )
+
+            if delete_scope == "ids" or reminder_ids is not None:
+                if reminder_ids is None:
+                    return await self._ask_for_missing_data(message, intent, ["id"])
+                return await self._create_delete_reminders_confirmation(
+                    message,
+                    operation_type="delete_reminder_ids",
+                    count=await self.reminder_service.count_existing_scheduled_reminders_by_ids(
+                        telegram_id=message.telegram_id,
+                        reminder_ids=reminder_ids,
+                    ),
+                    payload={"reminder_ids": reminder_ids},
+                    not_found_message=reminders_not_found_text(message.language),
+                )
+
             reminder_id = self._optional_int(parameters, "id", "reminder_id")
             if reminder_id is None:
                 return await self._ask_for_missing_data(message, intent, ["id"])
@@ -394,6 +451,32 @@ class IncomingMessageService:
             CreateDialogStateInput(
                 telegram_id=message.telegram_id,
                 state_type="confirm_delete_notes",
+                payload={
+                    "operation_type": operation_type,
+                    "count_preview": count,
+                    **payload,
+                },
+                language=message.language,
+                timezone=message.timezone or self.settings.default_timezone,
+            )
+        )
+        return delete_notes_confirmation_text(message.language)
+
+    async def _create_delete_reminders_confirmation(
+        self,
+        message: IncomingTextMessage,
+        *,
+        operation_type: str,
+        count: int,
+        payload: dict[str, Any],
+        not_found_message: str,
+    ) -> str:
+        if count <= 0:
+            return not_found_message
+        await self.dialog_service.create_dialog_state(
+            CreateDialogStateInput(
+                telegram_id=message.telegram_id,
+                state_type="confirm_delete_reminders",
                 payload={
                     "operation_type": operation_type,
                     "count_preview": count,
@@ -468,6 +551,60 @@ class IncomingMessageService:
 
         await self.dialog_service.complete_dialog_state(telegram_id=message.telegram_id)
         return notes_not_found_text(message.language)
+
+    async def _complete_delete_reminders_confirmation_dialog(
+        self,
+        message: IncomingTextMessage,
+        active_dialog,
+    ) -> str:
+        answer = self._confirmation_answer(message.text)
+        if answer is None:
+            return invalid_delete_confirmation_text(message.language)
+
+        if answer is False:
+            await self.dialog_service.cancel_dialog_state(
+                telegram_id=message.telegram_id,
+            )
+            return delete_notes_cancelled_text(message.language)
+
+        payload = dict(active_dialog.payload)
+        operation_type = str(payload.get("operation_type") or "")
+        try:
+            if operation_type == "delete_reminder_ids":
+                reminder_ids = self._coerce_int_list(payload.get("reminder_ids"))
+                cancelled_count = await self.reminder_service.cancel_reminders_by_ids(
+                    telegram_id=message.telegram_id,
+                    reminder_ids=reminder_ids,
+                )
+                await self.dialog_service.complete_dialog_state(
+                    telegram_id=message.telegram_id,
+                )
+                return cancelled_reminders_by_ids_text(
+                    cancelled_count,
+                    message.language,
+                )
+
+            if operation_type == "delete_all_reminders":
+                cancelled_count = (
+                    await self.reminder_service.cancel_all_scheduled_reminders(
+                        telegram_id=message.telegram_id,
+                    )
+                )
+                await self.dialog_service.complete_dialog_state(
+                    telegram_id=message.telegram_id,
+                )
+                return cancelled_all_reminders_text(
+                    cancelled_count,
+                    message.language,
+                )
+        except (NotFoundError, ValidationError):
+            await self.dialog_service.complete_dialog_state(
+                telegram_id=message.telegram_id,
+            )
+            return reminders_not_found_text(message.language)
+
+        await self.dialog_service.complete_dialog_state(telegram_id=message.telegram_id)
+        return reminders_not_found_text(message.language)
 
     async def _ask_for_missing_data(
         self,

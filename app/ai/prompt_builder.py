@@ -22,6 +22,8 @@ Rules:
 - Use delete_note or delete_reminder when the user asks to remove an item.
 - Use delete_note for deleting one note, several notes, all notes in a note
   category, or all notes.
+- Use delete_reminder for deleting or cancelling one reminder, several
+  reminders, or all active reminders.
 - Use unknown when intent is unclear.
 - confidence must be a number from 0 to 1.
 - parameters must be an object.
@@ -38,13 +40,22 @@ Rules:
   delete_scope: "category". Do not set delete_all for category deletion.
 - For deleting every note, include delete_scope: "all" and delete_all: true.
 - For deleting a single note, you may return id or note_id as before.
+- For deleting reminders, include structured parameters:
+  delete_scope: "ids" | "all".
+- For deleting specific reminders, include reminder_ids as an array of integers,
+  for example {"delete_scope": "ids", "reminder_ids": [1, 3, 7]}.
+- For deleting every active reminder, include delete_scope: "all" and
+  delete_all: true.
+- For deleting a single reminder, you may return id or reminder_id as before.
 - For notes, include category_name when the user explicitly names a category,
   for example "сохрани в закладку покупки", "добавь в категорию покупки",
   or "save to shopping".
 - If known_categories contains a confident match for a similar note, reuse the
   existing category name exactly as listed there.
-- For source_type "forwarded", still treat the message as a note and use these
-  same note category rules. Do not create a separate forwarded category system.
+- For source_type "forwarded", classify the text by meaning. If the forwarded
+  text is a reminder request, return create_reminder with text and remind_at.
+  If it is note content, return create_note and use the same note category
+  rules. Do not create a separate forwarded category system.
 - If a note should have a category but you are not sure which one, set
   parameters.missing_fields to ["category"] and ask for the category in
   clarification_question.

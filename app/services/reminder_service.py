@@ -75,3 +75,73 @@ class ReminderService:
         reminder = await self.reminders.cancel(reminder)
         await self.session.commit()
         return ReminderRead.model_validate(reminder)
+
+    async def count_scheduled_reminders(self, *, telegram_id: int) -> int:
+        user = await self.users.get_by_telegram_id(telegram_id)
+        if user is None:
+            return 0
+        return await self.reminders.count_scheduled_for_user(user.id)
+
+    async def count_existing_scheduled_reminders_by_ids(
+        self,
+        *,
+        telegram_id: int,
+        reminder_ids: list[int],
+    ) -> int:
+        clean_ids = self._clean_reminder_ids(reminder_ids)
+        user = await self.users.get_by_telegram_id(telegram_id)
+        if user is None:
+            return 0
+        reminders = await self.reminders.list_scheduled_by_ids_for_user(
+            user.id,
+            clean_ids,
+        )
+        found_ids = {reminder.id for reminder in reminders}
+        if found_ids != set(clean_ids):
+            return 0
+        return len(reminders)
+
+    async def cancel_reminders_by_ids(
+        self,
+        *,
+        telegram_id: int,
+        reminder_ids: list[int],
+    ) -> int:
+        clean_ids = self._clean_reminder_ids(reminder_ids)
+        user = await self.users.get_by_telegram_id(telegram_id)
+        if user is None:
+            raise NotFoundError("Reminders not found")
+        reminders = await self.reminders.list_scheduled_by_ids_for_user(
+            user.id,
+            clean_ids,
+        )
+        found_ids = {reminder.id for reminder in reminders}
+        if found_ids != set(clean_ids):
+            raise NotFoundError("Reminders not found")
+        cancelled_count = await self.reminders.cancel_many(reminders)
+        await self.session.commit()
+        return cancelled_count
+
+    async def cancel_all_scheduled_reminders(self, *, telegram_id: int) -> int:
+        user = await self.users.get_by_telegram_id(telegram_id)
+        if user is None:
+            raise NotFoundError("Reminders not found")
+        reminders = await self.reminders.list_scheduled_for_user(user.id)
+        if not reminders:
+            raise NotFoundError("Reminders not found")
+        cancelled_count = await self.reminders.cancel_many(reminders)
+        await self.session.commit()
+        return cancelled_count
+
+    def _clean_reminder_ids(self, reminder_ids: list[int]) -> list[int]:
+        clean_ids: list[int] = []
+        seen: set[int] = set()
+        for reminder_id in reminder_ids:
+            if reminder_id <= 0:
+                raise ValidationError("reminder_ids must contain positive ids")
+            if reminder_id not in seen:
+                clean_ids.append(reminder_id)
+                seen.add(reminder_id)
+        if not clean_ids:
+            raise ValidationError("reminder_ids must not be empty")
+        return clean_ids

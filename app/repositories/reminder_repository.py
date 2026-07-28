@@ -51,6 +51,39 @@ class ReminderRepository:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def count_scheduled_for_user(self, user_id: int) -> int:
+        stmt = select(Reminder).where(
+            Reminder.user_id == user_id,
+            Reminder.status == "scheduled",
+        )
+        result = await self.session.execute(stmt)
+        return len(list(result.scalars().all()))
+
+    async def list_scheduled_by_ids_for_user(
+        self,
+        user_id: int,
+        reminder_ids: list[int],
+    ) -> list[Reminder]:
+        stmt = (
+            select(Reminder)
+            .where(Reminder.user_id == user_id)
+            .where(Reminder.status == "scheduled")
+            .where(Reminder.id.in_(reminder_ids))
+            .order_by(asc(Reminder.id))
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_scheduled_for_user(self, user_id: int) -> list[Reminder]:
+        stmt = (
+            select(Reminder)
+            .where(Reminder.user_id == user_id)
+            .where(Reminder.status == "scheduled")
+            .order_by(asc(Reminder.remind_at_utc), asc(Reminder.id))
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def list_scheduled_due_before(self, when_utc: datetime) -> list[Reminder]:
         stmt = (
             select(Reminder)
@@ -93,3 +126,9 @@ class ReminderRepository:
         reminder.status = "cancelled"
         await self.session.flush()
         return reminder
+
+    async def cancel_many(self, reminders: list[Reminder]) -> int:
+        for reminder in reminders:
+            reminder.status = "cancelled"
+        await self.session.flush()
+        return len(reminders)

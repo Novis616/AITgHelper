@@ -136,6 +136,9 @@ class FakeReminderService:
     def __init__(self) -> None:
         self.created: list[CreateReminderInput] = []
         self.cancelled: list[int] = []
+        self.cancelled_many: list[list[int]] = []
+        self.cancelled_all = False
+        self.reminder_count = 3
         self.listed = [make_reminder(reminder_id=21, text="Buy milk")]
 
     async def create_reminder(self, data: CreateReminderInput) -> ReminderRead:
@@ -159,6 +162,32 @@ class FakeReminderService:
     ) -> ReminderRead:
         self.cancelled.append(reminder_id)
         return make_reminder(reminder_id=reminder_id, text="Cancelled")
+
+    async def count_scheduled_reminders(self, *, telegram_id: int) -> int:
+        return self.reminder_count
+
+    async def count_existing_scheduled_reminders_by_ids(
+        self,
+        *,
+        telegram_id: int,
+        reminder_ids: list[int],
+    ) -> int:
+        if self.reminder_count <= 0:
+            return 0
+        return len(reminder_ids)
+
+    async def cancel_reminders_by_ids(
+        self,
+        *,
+        telegram_id: int,
+        reminder_ids: list[int],
+    ) -> int:
+        self.cancelled_many.append(reminder_ids)
+        return len(reminder_ids)
+
+    async def cancel_all_scheduled_reminders(self, *, telegram_id: int) -> int:
+        self.cancelled_all = True
+        return self.reminder_count
 
 
 class FailingReminderService(FakeReminderService):
@@ -491,6 +520,76 @@ def test_incoming_service_saves_forwarded_text_with_ai_category_name() -> None:
         assert created_notes.forwarded[0].forward.source_chat_title == "Deals"
         assert created_notes.forwarded[0].forward.source_message_id == 77
         assert created_notes.forwarded[0].forward.forward_sender_name == "OZON"
+
+    run(scenario())
+
+
+def test_incoming_service_creates_forwarded_reminder_and_does_not_save_note() -> None:
+    async def scenario() -> None:
+        scheduler = FakeReminderScheduler()
+        service, ai, notes, reminders, dialogs = make_service(
+            IntentResult(
+                intent="create_reminder",
+                parameters={
+                    "text": "Open the door",
+                    "remind_at": "in 1 hour",
+                },
+            ),
+            reminder_scheduler=scheduler,
+        )
+
+        result = await service.handle_text_message(
+            IncomingTextMessage(
+                telegram_id=42,
+                text="Открой мне дверь через час",
+                language="ru",
+                timezone="UTC",
+                source_type="forwarded",
+                forward=ForwardInfo(forward_sender_name="Alice"),
+            )
+        )
+
+        assert result.intent == "create_reminder"
+        assert result.text.startswith("Готово, создал напоминание")
+        assert ai.calls[0].source_type == "forwarded"
+        assert notes.created == []
+        assert notes.forwarded == []
+        assert reminders.created[0].text == "Open the door"
+        assert scheduler.scheduled == [(3, reminders.created[0].remind_at)]
+        assert dialogs.created == []
+
+    run(scenario())
+
+
+def test_forwarded_create_reminder_with_missing_fields_creates_dialog_not_note() -> None:
+    async def scenario() -> None:
+        service, _, notes, reminders, dialogs = make_service(
+            IntentResult(
+                intent="create_reminder",
+                parameters={
+                    "text": "Open the door",
+                    "missing_fields": ["remind_at"],
+                },
+                clarification_question="When should I remind you?",
+            )
+        )
+
+        result = await service.handle_text_message(
+            IncomingTextMessage(
+                telegram_id=42,
+                text="Open the door later",
+                language="en",
+                source_type="forwarded",
+            )
+        )
+
+        assert result.intent == "create_reminder"
+        assert result.text == "When should I remind you?"
+        assert reminders.created == []
+        assert notes.created == []
+        assert notes.forwarded == []
+        assert dialogs.created[0].state_type == "create_reminder"
+        assert dialogs.created[0].payload["missing_fields"] == ["remind_at"]
 
     run(scenario())
 
@@ -872,6 +971,170 @@ def test_delete_all_notes_creates_confirmation_and_yes_deletes_all_user_notes() 
 
         assert confirmed.text == "Deleted all notes: 4."
         assert created_notes.deleted_all is True
+
+    run(scenario())
+
+
+def test_bulk_delete_reminder_ids_creates_confirmation_and_deletes_nothing_before_yes() -> None:
+    async def scenario() -> None:
+        service, _, _, reminders, dialogs = make_service(
+            IntentResult(
+                intent="delete_reminder",
+                parameters={"delete_scope": "ids", "reminder_ids": [1, 3, 7]},
+            )
+        )
+
+        result = await service.handle_text_message(
+            make_message("delete reminders 1, 3, 7")
+        )
+
+        assert result.text == "Delete? Yes/No"
+        assert reminders.cancelled_many == []
+        assert dialogs.created[0].state_type == "confirm_delete_reminders"
+        assert dialogs.created[0].payload == {
+            "operation_type": "delete_reminder_ids",
+            "count_preview": 3,
+            "reminder_ids": [1, 3, 7],
+        }
+
+    run(scenario())
+
+
+def test_bulk_delete_reminder_ids_yes_cancels_pending_reminders_only() -> None:
+    async def scenario() -> None:
+        dialogs = FakeDialogService()
+        now = datetime.now(timezone.utc)
+        dialogs.active = DialogStateRead(
+            id=1,
+            user_id=10,
+            state_type="confirm_delete_reminders",
+            status="active",
+            payload={
+                "operation_type": "delete_reminder_ids",
+                "count_preview": 3,
+                "reminder_ids": [1, 3, 7],
+            },
+            expires_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        service, ai, _, reminders, _ = make_service(
+            IntentResult(intent="unknown"),
+            dialog_service=dialogs,
+        )
+
+        result = await service.handle_text_message(make_message("Yes"))
+
+        assert result.text == "Cancelled 3 reminder(s)."
+        assert ai.calls == []
+        assert reminders.cancelled_many == [[1, 3, 7]]
+        assert dialogs.completed is True
+
+    run(scenario())
+
+
+def test_bulk_delete_reminders_no_cancels_pending_operation() -> None:
+    async def scenario() -> None:
+        dialogs = FakeDialogService()
+        now = datetime.now(timezone.utc)
+        dialogs.active = DialogStateRead(
+            id=1,
+            user_id=10,
+            state_type="confirm_delete_reminders",
+            status="active",
+            payload={
+                "operation_type": "delete_reminder_ids",
+                "count_preview": 2,
+                "reminder_ids": [1, 2],
+            },
+            expires_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        service, _, _, reminders, _ = make_service(
+            IntentResult(intent="unknown"),
+            dialog_service=dialogs,
+        )
+
+        result = await service.handle_text_message(make_message("No"))
+
+        assert result.text == "Deletion cancelled."
+        assert reminders.cancelled_many == []
+        assert dialogs.active is None
+
+    run(scenario())
+
+
+def test_bulk_delete_reminders_invalid_confirmation_keeps_dialog() -> None:
+    async def scenario() -> None:
+        dialogs = FakeDialogService()
+        now = datetime.now(timezone.utc)
+        dialogs.active = DialogStateRead(
+            id=1,
+            user_id=10,
+            state_type="confirm_delete_reminders",
+            status="active",
+            payload={
+                "operation_type": "delete_reminder_ids",
+                "count_preview": 1,
+                "reminder_ids": [1],
+            },
+            expires_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        service, _, _, reminders, _ = make_service(
+            IntentResult(intent="unknown"),
+            dialog_service=dialogs,
+        )
+
+        result = await service.handle_text_message(make_message("maybe"))
+
+        assert result.text == 'Please answer "Yes" or "No".'
+        assert reminders.cancelled_many == []
+        assert dialogs.active is not None
+
+    run(scenario())
+
+
+def test_delete_all_reminders_creates_confirmation_and_yes_cancels_all_scheduled() -> None:
+    async def scenario() -> None:
+        reminders = FakeReminderService()
+        reminders.reminder_count = 4
+        service, _, _, reminder_service, dialogs = make_service(
+            IntentResult(
+                intent="delete_reminder",
+                parameters={"delete_scope": "all", "delete_all": True},
+            ),
+            reminder_service=reminders,
+        )
+
+        result = await service.handle_text_message(make_message("delete all reminders"))
+
+        assert result.text == "Delete? Yes/No"
+        assert reminder_service.cancelled_all is False
+        assert dialogs.created[0].payload == {
+            "operation_type": "delete_all_reminders",
+            "count_preview": 4,
+            "delete_all": True,
+        }
+
+        now = datetime.now(timezone.utc)
+        dialogs.active = DialogStateRead(
+            id=1,
+            user_id=10,
+            state_type="confirm_delete_reminders",
+            status="active",
+            payload=dialogs.created[0].payload,
+            expires_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+
+        confirmed = await service.handle_text_message(make_message("Yes"))
+
+        assert confirmed.text == "Cancelled all active reminders: 4."
+        assert reminder_service.cancelled_all is True
 
     run(scenario())
 
